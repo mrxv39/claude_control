@@ -10,6 +10,13 @@ const ShowWindow = user32.func('bool __stdcall ShowWindow(intptr h, int c)');
 const IsIconic = user32.func('bool __stdcall IsIconic(intptr h)');
 const IsWindow = user32.func('bool __stdcall IsWindow(intptr h)');
 const SetForegroundWindow = user32.func('bool __stdcall SetForegroundWindow(intptr h)');
+const MoveWindow = user32.func('bool __stdcall MoveWindow(intptr h, int x, int y, int w, int hh, bool repaint)');
+const RECT = koffi.struct('RECT', { left:'int32', top:'int32', right:'int32', bottom:'int32' });
+const GetWindowRect = user32.func('bool __stdcall GetWindowRect(intptr h, _Out_ RECT *r)');
+const IsWindowVisible = user32.func('bool __stdcall IsWindowVisible(intptr h)');
+const POINT = koffi.struct('POINT', { x:'int32', y:'int32' });
+const WindowFromPoint = user32.func('intptr __stdcall WindowFromPoint(POINT p)');
+const GetAncestor = user32.func('intptr __stdcall GetAncestor(intptr h, uint flags)');
 const keybd_event = user32.func('void __stdcall keybd_event(uint8 vk, uint8 scan, uint flags, uintptr extra)');
 
 function focusWindow(hwnd) {
@@ -23,11 +30,8 @@ function focusWindow(hwnd) {
 let mainWindow;
 
 function createWindow() {
-  const { screen } = require('electron');
-  const { width } = screen.getPrimaryDisplay().workAreaSize;
-
   mainWindow = new BrowserWindow({
-    width, height: 48, x: 0, y: 0,
+    width: 300, height: 48, x: 0, y: 0,
     frame: false, transparent: false,
     alwaysOnTop: true, skipTaskbar: false, resizable: false,
     backgroundColor: '#181825',
@@ -36,6 +40,15 @@ function createWindow() {
   mainWindow.loadFile('index.html');
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
 }
+
+ipcMain.handle('resize-bar', (event, w) => {
+  if (!mainWindow) return;
+  const { screen } = require('electron');
+  const wa = screen.getPrimaryDisplay().workAreaSize;
+  const width = Math.max(180, Math.min(Math.ceil(w), wa.width));
+  const [, h] = mainWindow.getSize();
+  mainWindow.setBounds({ x: 0, y: 0, width, height: h });
+});
 
 // Get sessions
 ipcMain.handle('get-sessions', async () => {
@@ -87,5 +100,155 @@ ipcMain.handle('focus-wt', async (event, payload) => {
   } catch (e) { return 'ERROR'; }
 });
 
-app.whenReady().then(createWindow);
+// Tile a set of HWNDs across the primary work area (below the always-on-top bar)
+ipcMain.handle('tile-windows', async (event, hwnds) => {
+  try {
+    if (!Array.isArray(hwnds)) return 'BAD_INPUT';
+    const valid = hwnds.map(Number).filter(h => h && IsWindow(h));
+    if (valid.length === 0) return 'NO_HWNDS';
+
+    const { screen } = require('electron');
+    const wa = screen.getPrimaryDisplay().workArea;
+    const BAR_H = 48;
+    const x0 = wa.x;
+    const y0 = wa.y + BAR_H;
+    const w0 = wa.width;
+    const h0 = wa.height - BAR_H;
+
+    const n = valid.length;
+    let cols, rows;
+    if (n === 1)      { cols = 1; rows = 1; }
+    else if (n === 2) { cols = 2; rows = 1; }
+    else if (n === 3) { cols = 3; rows = 1; }
+    else if (n === 4) { cols = 2; rows = 2; }
+    else { cols = Math.ceil(Math.sqrt(n)); rows = Math.ceil(n / cols); }
+
+    const cellW = Math.floor(w0 / cols);
+    const cellH = Math.floor(h0 / rows);
+
+    valid.forEach((h, i) => {
+      const c = i % cols;
+      const r = Math.floor(i / cols);
+      if (IsIconic(h)) ShowWindow(h, 9);
+      else ShowWindow(h, 9); // SW_RESTORE: unmaximize if needed
+      MoveWindow(h, x0 + c * cellW, y0 + r * cellH, cellW, cellH, true);
+    });
+
+    // Bring them all to front in order, last one ends up focused
+    valid.forEach(h => focusWindow(h));
+    return 'OK';
+  } catch (e) { return 'ERROR:' + e.message; }
+});
+
+// ---- Title overlays: small frameless windows pinned to each WT window ----
+const overlays = new Map(); // hwnd -> { win, label }
+const OVERLAY_W = 220;
+const OVERLAY_H = 22;
+
+function overlayHtml(label) {
+  const safe = String(label).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
+<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:'Segoe UI',sans-serif;">
+<div style="background:#7aa2f7;color:#1a1b26;font-size:11px;font-weight:600;padding:3px 10px;border-radius:0 0 6px 6px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:16px;">${safe}</div>
+</body></html>`);
+}
+
+function createOverlay(hwnd, label) {
+  const win = new BrowserWindow({
+    width: OVERLAY_W, height: OVERLAY_H,
+    frame: false, transparent: true, alwaysOnTop: true,
+    skipTaskbar: true, focusable: false, resizable: false,
+    hasShadow: false, show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+  win.setIgnoreMouseEvents(true);
+  win.loadURL(overlayHtml(label));
+  win.setAlwaysOnTop(true, 'screen-saver');
+  return win;
+}
+
+function syncOverlays(sessions) {
+  const live = new Map();
+  for (const s of sessions) {
+    if (s.hwnd && IsWindow(s.hwnd)) live.set(Number(s.hwnd), s.project || '?');
+  }
+  // Remove dead overlays
+  for (const [h, info] of overlays) {
+    if (!live.has(h)) { try { info.win.destroy(); } catch {} overlays.delete(h); }
+  }
+  // Create or update
+  for (const [h, label] of live) {
+    let info = overlays.get(h);
+    if (!info) {
+      const win = createOverlay(h, label);
+      info = { win, label };
+      overlays.set(h, info);
+    } else if (info.label !== label) {
+      info.win.loadURL(overlayHtml(label));
+      info.label = label;
+    }
+  }
+}
+
+function repositionOverlays() {
+  for (const [h, info] of overlays) {
+    if (!IsWindow(h) || !IsWindowVisible(h) || IsIconic(h)) {
+      if (info.win.isVisible()) info.win.hide();
+      continue;
+    }
+    const r = {};
+    if (!GetWindowRect(h, r)) continue;
+    const wWidth = r.right - r.left;
+    const wHeight = r.bottom - r.top;
+    // Hit-test: probe a point inside the WT window's title area; if the topmost
+    // window there isn't this WT window (or one of its children), it's occluded.
+    // Probe a point clearly inside WT's client area, away from where our own
+    // overlay sits (centered top), to avoid hitting the overlay itself.
+    const probeX = r.left + 20;
+    const probeY = r.top + 50;
+    let occluded = false;
+    try {
+      const hit = WindowFromPoint({ x: probeX, y: probeY });
+      if (hit) {
+        const root = GetAncestor(hit, 2 /* GA_ROOT */) || hit;
+        if (Number(root) !== Number(h)) occluded = true;
+      } else {
+        occluded = true;
+      }
+    } catch {}
+    if (occluded) {
+      if (info.win.isVisible()) info.win.hide();
+      continue;
+    }
+    const x = r.left + Math.floor((wWidth - OVERLAY_W) / 2);
+    const y = r.top + 4;
+    info.win.setBounds({ x, y, width: OVERLAY_W, height: OVERLAY_H });
+    if (!info.win.isVisible()) info.win.showInactive();
+  }
+}
+
+let overlayPollTimer = null;
+function startOverlayLoop() {
+  if (overlayPollTimer) return;
+  overlayPollTimer = setInterval(repositionOverlays, 100);
+}
+
+// Sync overlays whenever renderer fetches sessions
+const _origGetSessions = ipcMain._invokeHandlers && ipcMain._invokeHandlers.get('get-sessions');
+ipcMain.removeHandler('get-sessions');
+ipcMain.handle('get-sessions', async () => {
+  try {
+    const r = execSync(
+      `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(__dirname, 'get-sessions.ps1')}"`,
+      { encoding: 'utf-8', timeout: 15000 }
+    ).trim();
+    if (!r) { syncOverlays([]); return []; }
+    const p = JSON.parse(r);
+    const arr = Array.isArray(p) ? p : [p];
+    syncOverlays(arr);
+    return arr;
+  } catch (e) { return []; }
+});
+
+app.whenReady().then(() => { createWindow(); startOverlayLoop(); });
 app.on('window-all-closed', () => app.quit());

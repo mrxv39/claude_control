@@ -4,20 +4,22 @@
 <meta charset="UTF-8">
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:max-content; }
 body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; user-select:none; -webkit-app-region:drag; }
-.bar { display:flex; align-items:center; height:44px; padding:0 14px; gap:8px; }
+.bar { display:inline-flex; align-items:center; height:44px; padding:0 14px; gap:8px; width:max-content; }
 .logo { font-size:13px; font-weight:600; color:#7aa2f7; margin-right:8px; flex-shrink:0; }
-.chips { display:flex; align-items:center; gap:6px; overflow-x:auto; flex:1; scrollbar-width:none; }
+.chips { display:flex; align-items:center; gap:6px; scrollbar-width:none; }
 .chips::-webkit-scrollbar { display:none; }
 .chip { display:flex; align-items:center; gap:6px; padding:5px 11px; border-radius:6px; cursor:pointer; white-space:nowrap; flex-shrink:0; -webkit-app-region:no-drag; border:1px solid transparent; }
 .chip:hover { filter:brightness(1.3); }
-.chip.busy { background:rgba(247,118,142,.2); border-color:rgba(247,118,142,.3); }
-.chip.waiting { background:rgba(224,175,104,.2); border-color:rgba(224,175,104,.3); }
-.chip.idle { background:rgba(158,206,106,.2); border-color:rgba(158,206,106,.3); }
+.chip.selected { outline:2px solid #7aa2f7; outline-offset:1px; }
+.chip.busy { background:rgba(158,206,106,.2); border-color:rgba(158,206,106,.3); }
+.chip.waiting { background:rgba(247,118,142,.2); border-color:rgba(247,118,142,.3); }
+.chip.idle { background:rgba(247,118,142,.2); border-color:rgba(247,118,142,.3); }
 .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
-.busy .dot { background:#f7768e; }
-.waiting .dot { background:#e0af68; }
-.idle .dot { background:#9ece6a; }
+.busy .dot { background:#9ece6a; }
+.waiting .dot { background:#f7768e; }
+.idle .dot { background:#f7768e; }
 .name { font-size:12px; font-weight:500; color:#c0caf5; }
 .run { font-size:10px; color:#565f89; }
 .stats { font-size:11px; color:#565f89; flex-shrink:0; margin-left:8px; }
@@ -37,22 +39,48 @@ const { ipcRenderer } = require('electron');
 const chips = document.getElementById('chips');
 const stats = document.getElementById('stats');
 
+const selected = new Set(); // hwnd values
+
 function render(sessions) {
   chips.innerHTML = '';
   if (!sessions.length) { chips.innerHTML = '<span class="run">No sessions</span>'; stats.textContent = ''; return; }
   const order = {BUSY:0, WAITING:1, IDLE:2};
   sessions.sort((a,b) => (order[a.status]||2) - (order[b.status]||2));
+  // Drop stale hwnds from selection
+  const live = new Set(sessions.map(s => s.hwnd).filter(Boolean));
+  for (const h of [...selected]) if (!live.has(h)) selected.delete(h);
+
   let b=0, w=0, i=0;
   sessions.forEach(s => {
     if (s.status==='BUSY') b++; else if (s.status==='WAITING') w++; else i++;
     const d = document.createElement('div');
     d.className = 'chip ' + s.status.toLowerCase();
+    if (s.hwnd && selected.has(s.hwnd)) d.classList.add('selected');
     const run = s.running !== '-' ? ` <span class="run">[${s.running}]</span>` : '';
     d.innerHTML = `<span class="dot"></span><span class="name">${s.project}</span>${run}`;
-    d.addEventListener('click', () => ipcRenderer.invoke('focus-wt', { hwnd: s.hwnd, tabIndex: s.tabIndex }));
+    d.addEventListener('click', (ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && s.hwnd) {
+        if (selected.has(s.hwnd)) selected.delete(s.hwnd);
+        else selected.add(s.hwnd);
+        if (selected.size >= 2) {
+          ipcRenderer.invoke('tile-windows', [...selected]);
+        }
+        refresh();
+        return;
+      }
+      // Plain click: focus single, clear selection
+      selected.clear();
+      ipcRenderer.invoke('focus-wt', { hwnd: s.hwnd, tabIndex: s.tabIndex });
+      refresh();
+    });
     chips.appendChild(d);
   });
-  stats.textContent = `${sessions.length}T ${b}● ${w}◉ ${i}○`;
+  stats.textContent = `${sessions.length}T ${b}● ${w}◉ ${i}○` + (selected.size ? ` · ${selected.size} sel` : '');
+  // Ask main to resize the window to fit content
+  requestAnimationFrame(() => {
+    const bar = document.querySelector('.bar');
+    if (bar) ipcRenderer.invoke('resize-bar', bar.scrollWidth + 4);
+  });
 }
 
 async function refresh() { render(await ipcRenderer.invoke('get-sessions')); }
