@@ -18,6 +18,30 @@ const POINT = koffi.struct('POINT', { x:'int32', y:'int32' });
 const WindowFromPoint = user32.func('intptr __stdcall WindowFromPoint(POINT p)');
 const GetAncestor = user32.func('intptr __stdcall GetAncestor(intptr h, uint flags)');
 const keybd_event = user32.func('void __stdcall keybd_event(uint8 vk, uint8 scan, uint flags, uintptr extra)');
+const FindWindowExA = user32.func('intptr __stdcall FindWindowExA(intptr parent, intptr after, str cls, str title)');
+const GetWindowThreadProcessId = user32.func('uint __stdcall GetWindowThreadProcessId(intptr h, _Out_ uint32 *pid)');
+const GetWindowTextW = user32.func('int __stdcall GetWindowTextW(intptr h, uint16 *buf, int max)');
+
+// Enumerate all WT windows, returns Map<wtPid, [{hwnd, title}]>
+function enumWtWindows() {
+  const map = new Map();
+  let h = 0;
+  while (true) {
+    h = FindWindowExA(0, h, 'CASCADIA_HOSTING_WINDOW_CLASS', null);
+    if (!h) break;
+    const pidBuf = [0];
+    GetWindowThreadProcessId(h, pidBuf);
+    const pid = pidBuf[0];
+    const titleBuf = new Uint16Array(512);
+    GetWindowTextW(h, titleBuf, 512);
+    // Decode UTF-16 title
+    let title = '';
+    for (let i = 0; i < titleBuf.length && titleBuf[i]; i++) title += String.fromCharCode(titleBuf[i]);
+    if (!map.has(pid)) map.set(pid, []);
+    map.get(pid).push({ hwnd: Number(h), title });
+  }
+  return map;
+}
 
 function focusWindow(hwnd) {
   if (IsIconic(hwnd)) ShowWindow(hwnd, 9);
@@ -273,6 +297,41 @@ ipcMain.handle('get-sessions', async () => {
     if (!r) { syncOverlays([]); return []; }
     const p = JSON.parse(r);
     const arr = Array.isArray(p) ? p : [p];
+
+    // Fill in missing HWNDs using WT window enumeration from Electron context
+    const needHwnd = arr.filter(s => !s.hwnd);
+    if (needHwnd.length > 0) {
+      const wtWindows = enumWtWindows();
+      // Collect all known HWNDs (from hook)
+      const knownHwnds = new Set(arr.filter(s => s.hwnd).map(s => Number(s.hwnd)));
+      // Find unassigned WT windows
+      const unassigned = [];
+      for (const [, wins] of wtWindows) {
+        for (const w of wins) {
+          if (!knownHwnds.has(w.hwnd)) unassigned.push(w);
+        }
+      }
+      // Try to match unassigned windows to sessions by title containing project name or cwd
+      for (const s of needHwnd) {
+        const proj = (s.project || '').toLowerCase();
+        const cwdLeaf = s.cwd ? s.cwd.split('\\').pop().toLowerCase() : '';
+        for (let i = 0; i < unassigned.length; i++) {
+          const title = unassigned[i].title.toLowerCase();
+          if ((proj && proj !== '?' && title.includes(proj)) ||
+              (cwdLeaf && title.includes(cwdLeaf))) {
+            s.hwnd = unassigned[i].hwnd;
+            unassigned.splice(i, 1);
+            break;
+          }
+        }
+        // If still no match and only one unassigned window left, use it
+        if (!s.hwnd && unassigned.length === 1 && needHwnd.length === 1) {
+          s.hwnd = unassigned[0].hwnd;
+          unassigned.splice(0, 1);
+        }
+      }
+    }
+
     syncOverlays(arr);
     return arr;
   } catch (e) { return []; }

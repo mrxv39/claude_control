@@ -62,12 +62,32 @@ foreach ($s in $shells) {
             else { $status = 'WAITING'; $running = 'claude (idle)' }
         } else {
             $status = 'BUSY'
-            $running = ($children | ForEach-Object { $_.Name -replace '\.exe$', '' }) -join ', '
+            # Try to extract meaningful name from command line (e.g. "npm run tauri" instead of "node")
+            $descs = @()
+            foreach ($ch in $children) {
+                if ($ch.CommandLine -match 'npm\s+run\s+(\S+)') { $descs += "npm:$($Matches[1])" }
+                elseif ($ch.CommandLine -match 'tauri\s+(dev|build)') { $descs += "tauri $($Matches[1])" }
+                elseif ($ch.CommandLine -match 'cargo\s+(run|build|test)') { $descs += "cargo $($Matches[1])" }
+                elseif ($ch.CommandLine -match 'npx\s+(\S+)') { $descs += "npx:$($Matches[1])" }
+                else { $descs += ($ch.Name -replace '\.exe$', '') }
+            }
+            $running = $descs -join ', '
         }
     }
 
     $cwd = try { [CwdHelper]::GetCwd([int]$s.ProcessId) } catch { $null }
     if (-not $cwd) { $cwd = 'N/A' }
+
+    # Fallback: if shell CWD is user home (common with pwsh), try child process CWD
+    if (($cwd -eq $env:USERPROFILE -or $cwd -eq 'N/A') -and $children.Count -gt 0) {
+        foreach ($ch in $children) {
+            $chCwd = try { [CwdHelper]::GetCwd([int]$ch.ProcessId) } catch { $null }
+            if ($chCwd -and $chCwd -ne $env:USERPROFILE -and $chCwd -ne 'N/A') {
+                $cwd = $chCwd
+                break
+            }
+        }
+    }
 
     # Override status from hook state file (more reliable than process-tree heuristic)
     $hwnd = 0

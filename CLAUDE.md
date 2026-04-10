@@ -5,9 +5,9 @@ Monitor visual de sesiones Claude Code corriendo en Windows Terminal. Barra siem
 ## Componentes
 
 - **`electron-monitor/`** — app Electron principal (la barra + overlays + tile).
-  - `main.js` — proceso principal. Win32 vía koffi (`user32.dll`). Maneja IPC: `get-sessions`, `focus-wt`, `tile-windows`, `resize-bar`. Loop de 100ms reposiciona overlays.
-  - `index.html` — renderer de la barra. Renderiza chips, gestiona selección multi (Ctrl+click), pide resize a main tras cada render.
-  - `get-sessions.ps1` — enumera shells (powershell/pwsh/cmd) hijos de `WindowsTerminal.exe`, detecta si están corriendo Claude, lee el estado del state file del hook, devuelve JSON con `pid, hwnd, status, project, cwd, running, isClaude, shell`. Lee `cwd` real del proceso shell vía `NtQueryInformationProcess` + `ReadProcessMemory` (PEB walk).
+  - `main.js` — proceso principal. Win32 vía koffi (`user32.dll`). Maneja IPC: `get-sessions`, `focus-wt`, `tile-windows`, `resize-bar`. Loop de 100ms reposiciona overlays. Enumera ventanas WT con `FindWindowExA` para asignar HWNDs a sesiones sin hook (servicios). La barra arranca centrada horizontalmente y recuerda la posición si el usuario la arrastra.
+  - `index.html` — renderer de la barra. Renderiza chips, gestiona selección multi (Ctrl+click), pide resize a main tras cada render. Agrupa sesiones por `cwd`: si una sesión Claude y una shell de servicio (ej: `npm run tauri dev`) comparten directorio, se fusionan en un solo chip con badges de servicio clickables debajo.
+  - `get-sessions.ps1` — enumera shells (powershell/pwsh/cmd) hijos de `WindowsTerminal.exe`, detecta si están corriendo Claude, lee el estado del state file del hook, devuelve JSON con `pid, hwnd, status, project, cwd, running, isClaude, shell`. Lee `cwd` real del proceso shell vía `NtQueryInformationProcess` + `ReadProcessMemory` (PEB walk). Fallback: si el CWD de la shell es genérico (user home), lee el CWD del proceso hijo. Para sesiones no-Claude, intenta extraer nombres descriptivos del command line (ej: `tauri dev` en vez de `node`).
   - `claude-state-hook.ps1` — hook de Claude Code (configurado en `~/.claude/settings.json`). Recibe el evento por stdin, escribe `~/.claude/claudio-state/<sha1(cwd)>.json` con `{status, cwd, ts, sessionId, hwnd, hwndTs}`. **Solo en `Status=BUSY`** captura `GetForegroundWindow()` y verifica `ClassName == 'CASCADIA_HOSTING_WINDOW_CLASS'` para mapear la sesión a su HWND de WT. Cachea HWND 5 min.
 
 - **`SessionMonitor/`**, **`ClaudeSession/`** — módulos PowerShell antiguos importados desde `$PROFILE`. (Versión previa de la lógica de detección.)
@@ -30,7 +30,7 @@ WT puede tener **múltiples ventanas en un único proceso** `WindowsTerminal.exe
 2. El HWND se persiste en el state file por cwd.
 3. `get-sessions.ps1` lo expone; `index.html` lo manda a `focus-wt`; `main.js` valida `IsWindow(hwnd)` y hace `SetForegroundWindow` directo.
 
-Sesiones que aún no han disparado un BUSY post-instalación tendrán `hwnd=0` → fallback al método antiguo (no fiable con 2+ ventanas WT).
+Sesiones que aún no han disparado un BUSY post-instalación tendrán `hwnd=0` → `main.js` intenta asignar HWND enumerando ventanas WT (`FindWindowExA`) y haciendo match por título de ventana vs nombre de proyecto. Fallback final: método antiguo (no fiable con 2+ ventanas WT).
 
 ## Overlays de título
 
@@ -50,9 +50,19 @@ Ctrl+click en chips los añade/quita de un `Set` de selección. En cuanto hay 2+
 - Origen `y = workArea.y + 48` para no taparse con la barra siempre-encima.
 - `ShowWindow(h, 9)` (SW_RESTORE) antes de mover por si está maximizada.
 
+## Agrupado de sesiones por proyecto
+
+Sesiones con el mismo `cwd` se agrupan en un solo chip. Si un proyecto tiene una sesión Claude Y una shell ejecutando un servicio (ej: `npm run tauri dev`, `cargo run`), el chip muestra:
+- Línea principal: estado Claude (dot + nombre + `[claude (working)]`)
+- Línea secundaria: badges de servicio clickables (`⚙ tauri dev`)
+
+Click en el badge de servicio enfoca la ventana WT del servicio. Click en la zona principal enfoca la sesión Claude. Los badges usan el HWND propio del servicio (asignado por enumeración de ventanas WT en `main.js`) o el HWND de la sesión Claude del grupo como fallback.
+
+`get-sessions.ps1` extrae nombres descriptivos del command line: `npm run X` → `npm:X`, `tauri dev/build` → `tauri dev`, `cargo run/build/test` → `cargo run`, `npx X` → `npx:X`.
+
 ## Barra autoajustable
 
-`html/body { width: max-content }` + `bar { display:inline-flex }`. El renderer mide `bar.scrollWidth` tras cada render y llama `resize-bar` (clamp 180–screenWidth). Refresh cada 3s.
+Arranca centrada horizontalmente en la pantalla. Si el usuario la arrastra, recuerda la posición (variable `userPosition`). El auto-resize mantiene esa posición (clamped a los bordes). `html/body { width: max-content }` + `bar { display:inline-flex }`. El renderer mide `bar.scrollWidth` tras cada render y llama `resize-bar` (clamp 180–screenWidth). Refresh cada 3s.
 
 ## Convenciones del proyecto
 
@@ -63,6 +73,7 @@ Ctrl+click en chips los añade/quita de un `Set` de selección. En cuanto hay 2+
 
 ## Pendientes / cosas frágiles
 
-- HWND solo se captura en eventos `BUSY`. Si la primera vez que el usuario abre la app no ha mandado prompt aún, el chip cae al fallback y los clicks pueden colisionar entre ventanas WT.
+- HWND de Claude solo se captura en eventos `BUSY`. Para sesiones sin hook (servicios), `main.js` enumera ventanas WT y hace match por título; si el título no contiene el nombre del proyecto, el HWND queda en 0.
 - Si el usuario mueve una sesión Claude a otra ventana WT (drag tab out), el HWND cacheado queda obsoleto hasta que pasen 5 min o se borre el state file.
 - Los overlays asumen una pantalla principal (`getPrimaryDisplay`). Multi-monitor puede tener offsets raros.
+- CWD fallback a proceso hijo solo se activa si el CWD de la shell es exactamente `$USERPROFILE`. Si la shell está en otro directorio genérico, no se activa.
