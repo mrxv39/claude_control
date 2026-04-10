@@ -1,86 +1,161 @@
-# claudio_control
+# Claudio Control
 
-Monitor y control de sesiones de Claude Code para Windows Terminal.
+**Visual session monitor for Claude Code on Windows Terminal.**
 
-## Problema
+An always-on-top bar that shows all your Claude Code sessions at a glance: which ones are working, which ones are waiting for input, and lets you switch between them with a single click.
 
-Cuando tienes varias pestañas de Windows Terminal con Claude Code, todas muestran "Claude Code" como título — imposible saber cuál es cuál. Tampoco hay forma de ver de un vistazo qué consolas están trabajando y cuáles esperan input.
+![Windows 11](https://img.shields.io/badge/Windows-11-0078D4?logo=windows11)
+![Electron](https://img.shields.io/badge/Electron-35-47848F?logo=electron)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## Solución
+---
 
-Dos herramientas PowerShell sin dependencias externas:
+## The problem
 
-### 1. `claude-session` — Título de pestaña inteligente
+When you run multiple Claude Code sessions in Windows Terminal, every tab shows the same generic title. There's no way to tell which session is actively processing a prompt, which one is waiting for input, and clicking the right tab is a guessing game — especially with 2+ WT windows.
 
-Wrapper que lanza Claude Code fijando el título del tab al nombre del proyecto.
+## The solution
 
-```powershell
-# Lanza Claude en la carpeta indicada — tab muestra "🤖 ipokertools"
-claude-session C:\Projects\ipokertools
+A lightweight Electron bar pinned to the top of your screen:
 
-# Desde el directorio actual
-cs
+- **One chip per session** — colored by status (green = working, red = waiting/idle)
+- **Project name** extracted from each session's working directory
+- **Click to focus** — brings the correct WT window to the front (even across multiple WT windows)
+- **Ctrl+Click to tile** — select 2+ sessions and they auto-arrange side by side
+- **Title overlays** — floating labels pinned to each WT window's title bar showing the project name
+- **Draggable** — starts centered at the top; drag it anywhere and it stays put
+- **Auto-resize** — bar width adjusts to fit the number of active sessions
 
-# Pasa argumentos a Claude
-cs --dangerously-skip-permissions
-cs -p "explica este código"
-```
+### Status colors
 
-### 2. `Start-SessionMonitor` — Dashboard de sesiones
+| Status   | Color | Meaning                              |
+|----------|-------|--------------------------------------|
+| BUSY     | Green | Claude is processing a prompt        |
+| WAITING  | Red   | Claude session open, waiting for you |
+| IDLE     | Red   | Shell with no Claude running         |
 
-TUI que muestra todas las pestañas de terminal abiertas con su estado en tiempo real.
+---
 
-```
-╔══════════════════════════════════════════════════════════════════════╗
-║  TERMINAL SESSION MONITOR                     Updated: 15:42:03    ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  #   STATUS     PROJECT              RUNNING           SHELL       ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  1   🔴 BUSY    🤖 ipokertools       claude             powershell ║
-║  2   🟢 IDLE    claudio_control      -                  powershell ║
-║  3   🔴 BUSY    mysite               node               pwsh       ║
-╠══════════════════════════════════════════════════════════════════════╣
-║  3 sessions | 2 busy | 1 idle              [Q] Quit  [R] Refresh  ║
-╚══════════════════════════════════════════════════════════════════════╝
-```
+## Quick start
 
-- Refresco cada 2 segundos sin parpadeo
-- Detecta automáticamente sesiones de Claude (icono 🤖)
-- `Q` para salir, `R` para refresh inmediato
-
-```powershell
-# Abrir en una pestaña dedicada
-Start-SessionMonitor
-
-# Refresh cada 5 segundos
-Start-SessionMonitor -RefreshSeconds 5
-
-# Incluir la propia pestaña del monitor
-Start-SessionMonitor -IncludeSelf
-```
-
-## Instalación
-
-```powershell
-cd C:\Users\Usuario\Documents\Claude\Projects\claudio_control
-.\Install.ps1
-```
-
-Esto agrega los módulos al perfil de PowerShell. Para cargar sin reiniciar:
-
-```powershell
-. $PROFILE
-```
-
-## Requisitos
+### Prerequisites
 
 - Windows 10/11
 - Windows Terminal
-- PowerShell 5.1+ o PowerShell 7+
-- Claude Code CLI instalado
+- Node.js 18+
+- Claude Code CLI installed
 
-## Cómo funciona
+### 1. Clone and install
 
-**ClaudeSession**: Fija el título del tab via `$Host.UI.RawUI.WindowTitle` + secuencias de escape OSC, y usa la variable `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` para impedir que Claude lo sobreescriba. Restaura el título al salir.
+```powershell
+git clone https://github.com/mrxv39/claude_control.git
+cd claude_control/electron-monitor
+npm install
+```
 
-**SessionMonitor**: Usa `Get-CimInstance Win32_Process` para detectar shells cuyo proceso padre es Windows Terminal. Clasifica como BUSY si tienen procesos hijos (excluyendo conhost.exe). Obtiene el directorio de trabajo de cada shell leyendo el PEB del proceso via P/Invoke (`NtQueryInformationProcess` + `ReadProcessMemory`).
+### 2. Configure the Claude Code hook
+
+Add this to your `~/.claude/settings.json` (create it if it doesn't exist):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\path\\to\\claude_control\\electron-monitor\\claude-state-hook.ps1\" -Status BUSY"
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\path\\to\\claude_control\\electron-monitor\\claude-state-hook.ps1\" -Status WAITING"
+      }
+    ],
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\path\\to\\claude_control\\electron-monitor\\claude-state-hook.ps1\" -Status WAITING"
+      }
+    ]
+  }
+}
+```
+
+> Replace `C:\\path\\to\\claude_control` with your actual install path.
+
+### 3. Launch
+
+```powershell
+cd electron-monitor
+npm start
+```
+
+The bar appears centered at the top of your screen. Open a few Claude Code sessions and watch the chips appear.
+
+---
+
+## How it works
+
+### Session detection (`get-sessions.ps1`)
+
+Enumerates all shell processes (`powershell`, `pwsh`, `cmd`) that are children of `WindowsTerminal.exe`. For each shell:
+
+- Reads the **real working directory** from the process PEB via `NtQueryInformationProcess` + `ReadProcessMemory` (no heuristics, no temp files)
+- Checks if Claude Code is running as a child process
+- Reads the **hook state file** (`~/.claude/claudio-state/<hash>.json`) for accurate status
+
+### Window identification (`claude-state-hook.ps1`)
+
+Windows Terminal can run multiple windows in a single process, so tab indices don't reliably identify windows. The hook solves this:
+
+1. When you submit a prompt (`BUSY` event), the hook captures `GetForegroundWindow()` — at that exact moment, the WT window hosting your session is in the foreground
+2. The HWND is persisted in a state file keyed by the session's working directory
+3. The monitor reads this HWND and uses `SetForegroundWindow` for precise focus — no keystroke simulation needed
+
+### Title overlays
+
+A frameless, transparent, click-through `BrowserWindow` is created for each WT window. A 100ms polling loop:
+
+- Repositions each overlay centered on its WT window's title bar
+- Hides overlays when the WT window is minimized, hidden, or occluded by another window
+
+### Tiling
+
+Ctrl+Click chips to select them. With 2+ selected, windows auto-tile:
+
+- 2 windows: side by side
+- 3 windows: three columns
+- 4 windows: 2x2 grid
+- 5+: auto-calculated grid
+
+---
+
+## Legacy tools (PowerShell)
+
+The repo also includes the original PowerShell-based tools that work without Electron:
+
+- **`claude-session`** / **`cs`** — launches Claude Code with a smart tab title showing the project name
+- **`Start-SessionMonitor`** — TUI dashboard showing all terminal sessions in real time
+
+Install with:
+
+```powershell
+.\Install.ps1
+```
+
+---
+
+## Known limitations
+
+- **HWND capture requires at least one prompt** — sessions that haven't sent a prompt yet fall back to a less reliable focus method
+- **Tab drag-out** — if you drag a Claude tab to a new WT window, the cached HWND is stale for up to 5 minutes
+- **Single monitor optimized** — multi-monitor setups may have overlay positioning quirks
+
+## Contributing
+
+This is an early-stage project. Feedback, bug reports, and PRs are welcome! Please open an issue to discuss before submitting large changes.
+
+## License
+
+MIT
