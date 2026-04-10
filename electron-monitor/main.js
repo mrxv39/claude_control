@@ -28,10 +28,17 @@ function focusWindow(hwnd) {
 }
 
 let mainWindow;
+let userPosition = null;   // { x, y } — set when user drags the bar
+let isSettingBounds = false; // suppress 'move' during programmatic setBounds
 
 function createWindow() {
+  const { screen } = require('electron');
+  const wa = screen.getPrimaryDisplay().workArea;
+  const initW = 300;
+  const initX = Math.round((wa.width - initW) / 2) + wa.x;
+
   mainWindow = new BrowserWindow({
-    width: 300, height: 48, x: 0, y: 0,
+    width: initW, height: 48, x: initX, y: wa.y,
     frame: false, transparent: false,
     alwaysOnTop: true, skipTaskbar: false, resizable: false,
     backgroundColor: '#181825',
@@ -39,15 +46,36 @@ function createWindow() {
   });
   mainWindow.loadFile('index.html');
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
+
+  // Detect user dragging the bar
+  mainWindow.on('move', () => {
+    if (isSettingBounds) return;
+    const [x, y] = mainWindow.getPosition();
+    userPosition = { x, y };
+  });
 }
 
 ipcMain.handle('resize-bar', (event, w) => {
   if (!mainWindow) return;
   const { screen } = require('electron');
-  const wa = screen.getPrimaryDisplay().workAreaSize;
+  const wa = screen.getPrimaryDisplay().workArea;
   const width = Math.max(180, Math.min(Math.ceil(w), wa.width));
   const [, h] = mainWindow.getSize();
-  mainWindow.setBounds({ x: 0, y: 0, width, height: h });
+
+  let x, y;
+  if (userPosition) {
+    // Keep user-chosen position, clamp to screen bounds
+    x = Math.max(wa.x, Math.min(userPosition.x, wa.x + wa.width - width));
+    y = Math.max(wa.y, Math.min(userPosition.y, wa.y + wa.height - h));
+  } else {
+    // Center horizontally at top
+    x = Math.round((wa.width - width) / 2) + wa.x;
+    y = wa.y;
+  }
+
+  isSettingBounds = true;
+  mainWindow.setBounds({ x, y, width, height: h });
+  isSettingBounds = false;
 });
 
 // Get sessions
