@@ -22,11 +22,13 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
 .busy .dot { background:#9ece6a; }
 .waiting .dot { background:#f7768e; }
 .idle .dot { background:#f7768e; }
-.name { font-size:12px; font-weight:500; color:#c0caf5; }
+.name { font-size:12px; font-weight:500; color:#c0caf5; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
 .run { font-size:10px; color:#565f89; }
 .stats { font-size:11px; color:#565f89; flex-shrink:0; margin-left:8px; }
 .svc { font-size:9px; color:#7aa2f7; background:rgba(122,162,247,.15); padding:1px 6px; border-radius:3px; cursor:pointer; }
 .svc:hover { background:rgba(122,162,247,.35); filter:brightness(1.2); }
+.chip.update { background:rgba(224,175,104,.2); border-color:rgba(224,175,104,.4); cursor:pointer; }
+.chip.setup { background:rgba(224,175,104,.2); border-color:rgba(224,175,104,.4); cursor:pointer; }
 .close { background:rgba(255,255,255,.08); border:none; color:#565f89; font-size:13px; cursor:pointer; padding:3px 7px; border-radius:4px; -webkit-app-region:no-drag; }
 .close:hover { background:rgba(247,118,142,.3); color:#f7768e; }
 </style>
@@ -36,7 +38,7 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
   <span class="logo">Sessions</span>
   <div class="chips" id="chips"></div>
   <span class="stats" id="stats"></span>
-  <button class="close" onclick="window.close()">✕</button>
+  <button class="close" onclick="ipcRenderer.invoke('hide-bar')">✕</button>
 </div>
 <script>
 const { ipcRenderer } = require('electron');
@@ -90,6 +92,7 @@ function render(sessions) {
     const d = document.createElement('div');
     d.className = 'chip ' + s.status.toLowerCase();
     if (s.hwnd && selected.has(s.hwnd)) d.classList.add('selected');
+    d.title = `${s.project}\n${s.cwd || ''}\nEstado: ${s.status}\nPID: ${s.pid}`;
     const run = s.running !== '-' ? ` <span class="run">[${s.running}]</span>` : '';
 
     // Build main row
@@ -136,15 +139,51 @@ function render(sessions) {
   });
   const total = sessions.length;
   stats.textContent = `${total}T ${b}● ${w}◉ ${i}○` + (selected.size ? ` · ${selected.size} sel` : '');
-  requestAnimationFrame(() => {
+  // Debounced resize to avoid jank
+  clearTimeout(render._resizeTimer);
+  render._resizeTimer = setTimeout(() => {
     const bar = document.querySelector('.bar');
-    if (bar) ipcRenderer.invoke('resize-bar', bar.scrollWidth + 4);
-  });
+    if (bar) {
+      const w = bar.scrollWidth + 4;
+      if (w !== render._lastWidth) { render._lastWidth = w; ipcRenderer.invoke('resize-bar', w); }
+    }
+  }, 100);
 }
 
 async function refresh() { render(await ipcRenderer.invoke('get-sessions')); }
 refresh();
 setInterval(refresh, 3000);
+
+// Show update chip if available
+ipcRenderer.on('update-available', (ev, version, url) => {
+  let upd = document.getElementById('update-chip');
+  if (upd) return;
+  upd = document.createElement('div');
+  upd.id = 'update-chip';
+  upd.className = 'chip update';
+  upd.innerHTML = `<div class="chip-main"><span class="name" style="color:#e0af68">Update ${version}</span></div>`;
+  upd.title = 'Click para descargar la nueva version';
+  upd.addEventListener('click', () => { require('electron').shell.openExternal(url); });
+  document.querySelector('.chips').prepend(upd);
+});
+
+// Show setup chip if hook is missing
+ipcRenderer.on('hook-missing', () => {
+  let sc = document.getElementById('setup-chip');
+  if (sc) return;
+  sc = document.createElement('div');
+  sc.id = 'setup-chip';
+  sc.className = 'chip setup';
+  sc.innerHTML = `<div class="chip-main"><span class="name" style="color:#e0af68">Configurar hook</span></div>`;
+  sc.title = 'Click para configurar el hook de Claude Code (necesario para detectar estados)';
+  sc.addEventListener('click', async () => {
+    sc.innerHTML = `<div class="chip-main"><span class="name" style="color:#e0af68">Configurando...</span></div>`;
+    const ok = await ipcRenderer.invoke('run-setup-hook');
+    if (ok) { sc.remove(); refresh(); }
+    else { sc.innerHTML = `<div class="chip-main"><span class="name" style="color:#f7768e">Error al configurar</span></div>`; }
+  });
+  document.querySelector('.chips').prepend(sc);
+});
 </script>
 </body>
 </html>

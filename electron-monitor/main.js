@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, Notification, shell } = require('electron');
 const { execSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const koffi = require('koffi');
 
 // Win32
@@ -52,8 +53,10 @@ function focusWindow(hwnd) {
 }
 
 let mainWindow;
+let tray = null;
 let userPosition = null;   // { x, y } — set when user drags the bar
 let isSettingBounds = false; // suppress 'move' during programmatic setBounds
+let isQuitting = false;
 
 function createWindow() {
   const { screen } = require('electron');
@@ -71,6 +74,11 @@ function createWindow() {
   mainWindow.loadFile('index.html');
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
 
+  // Minimize to tray instead of closing
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) { e.preventDefault(); mainWindow.hide(); }
+  });
+
   // Detect user dragging the bar
   mainWindow.on('move', () => {
     if (isSettingBounds) return;
@@ -78,6 +86,42 @@ function createWindow() {
     userPosition = { x, y };
   });
 }
+
+function createTray() {
+  // Generate a simple tray icon using nativeImage
+  const { nativeImage } = require('electron');
+  let icon;
+  const customIcon = path.join(__dirname, 'icon.png');
+  if (fs.existsSync(customIcon)) {
+    icon = nativeImage.createFromPath(customIcon);
+  } else {
+    // Create a 16x16 icon: green circle on transparent background
+    const size = 16;
+    const buf = Buffer.alloc(size * size * 4, 0);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = x - 7.5, dy = y - 7.5;
+        if (dx*dx + dy*dy <= 49) { // radius 7
+          const i = (y * size + x) * 4;
+          buf[i] = 122; buf[i+1] = 162; buf[i+2] = 247; buf[i+3] = 255; // #7aa2f7
+        }
+      }
+    }
+    icon = nativeImage.createFromBuffer(buf, { width: size, height: size });
+  }
+  tray = new Tray(icon);
+  tray.setToolTip('Claudio Control');
+  const menu = Menu.buildFromTemplate([
+    { label: 'Mostrar', click: () => { mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver'); } },
+    { type: 'separator' },
+    { label: 'Salir', click: () => { isQuitting = true; app.quit(); } }
+  ]);
+  tray.setContextMenu(menu);
+  tray.on('click', () => { mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver'); });
+}
+
+// IPC: hide bar (from ✕ button)
+ipcMain.handle('hide-bar', () => { if (mainWindow) mainWindow.hide(); });
 
 ipcMain.handle('resize-bar', (event, w) => {
   if (!mainWindow) return;
@@ -285,6 +329,109 @@ function startOverlayLoop() {
   overlayPollTimer = setInterval(repositionOverlays, 100);
 }
 
+// ---- Status change notifications (custom toast window) ----
+const prevStatus = new Map(); // cwd -> status
+
+function showToast(message) {
+  const { screen } = require('electron');
+  const wa = screen.getPrimaryDisplay().workArea;
+  const W = 320, H = 60;
+  const toast = new BrowserWindow({
+    width: W, height: H,
+    x: wa.x + wa.width - W - 16,
+    y: wa.y + wa.height - H - 16,
+    frame: false, transparent: true, alwaysOnTop: true,
+    skipTaskbar: true, focusable: false, resizable: false,
+    hasShadow: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+  toast.setIgnoreMouseEvents(true);
+  const safe = String(message).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  toast.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`
+<!DOCTYPE html><html><body style="margin:0;font-family:'Segoe UI',sans-serif;">
+<div style="background:#1a1b26;border:1px solid #7aa2f7;border-radius:10px;padding:12px 18px;color:#c0caf5;font-size:13px;display:flex;align-items:center;gap:10px;height:100%;box-sizing:border-box;">
+<span style="font-size:20px;">&#9989;</span>
+<span>${safe}</span>
+</div></body></html>`));
+  toast.setAlwaysOnTop(true, 'screen-saver');
+  toast.showInactive();
+  // Play 7-Eleven chime
+  playChime();
+  setTimeout(() => { try { toast.destroy(); } catch {} }, 5000);
+}
+
+function checkStatusChanges(sessions) {
+  for (const s of sessions) {
+    if (!s.isClaude || !s.cwd) continue;
+    const prev = prevStatus.get(s.cwd);
+    prevStatus.set(s.cwd, s.status);
+    if (prev === 'BUSY' && s.status === 'WAITING') {
+      showToast(`${s.project} termino — esperando tu input`);
+    }
+  }
+}
+
+// ---- 7-Eleven chime generator ----
+function generateChimeWav() {
+  const sampleRate = 22050;
+  const tone1Freq = 1319; // E6
+  const tone2Freq = 988;  // B5
+  const tone1Dur = 0.35;
+  const tone2Dur = 0.45;
+  const pause = 0.08;
+  const volume = 0.4;
+
+  const totalSamples = Math.floor((tone1Dur + pause + tone2Dur) * sampleRate);
+  const data = Buffer.alloc(totalSamples * 2); // 16-bit mono
+
+  for (let i = 0; i < totalSamples; i++) {
+    const t = i / sampleRate;
+    let sample = 0;
+    if (t < tone1Dur) {
+      const env = Math.min(1, t / 0.01) * Math.min(1, (tone1Dur - t) / 0.05);
+      sample = Math.sin(2 * Math.PI * tone1Freq * t) * env * volume;
+    } else if (t > tone1Dur + pause) {
+      const t2 = t - tone1Dur - pause;
+      const env = Math.min(1, t2 / 0.01) * Math.min(1, (tone2Dur - t2) / 0.08);
+      sample = Math.sin(2 * Math.PI * tone2Freq * t2) * env * volume;
+    }
+    data.writeInt16LE(Math.round(sample * 32767), i * 2);
+  }
+
+  // WAV header
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);       // chunk size
+  header.writeUInt16LE(1, 20);        // PCM
+  header.writeUInt16LE(1, 22);        // mono
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  header.writeUInt16LE(2, 32);        // block align
+  header.writeUInt16LE(16, 34);       // bits per sample
+  header.write('data', 36);
+  header.writeUInt32LE(data.length, 40);
+
+  return Buffer.concat([header, data]);
+}
+
+let chimePath = null;
+function playChime() {
+  try {
+    if (!chimePath) {
+      const tmpDir = path.join(process.env.USERPROFILE, '.claude', 'claudio-state');
+      chimePath = path.join(tmpDir, 'chime.wav');
+      if (!fs.existsSync(chimePath)) {
+        fs.writeFileSync(chimePath, generateChimeWav());
+      }
+    }
+    execSync(`powershell.exe -NoProfile -Command "(New-Object Media.SoundPlayer '${chimePath}').PlaySync()"`,
+      { timeout: 5000 });
+  } catch {}
+}
+
 // Resolve script paths: packaged app puts them in resources/, dev uses __dirname
 function resolveScript(name) {
   const dev = path.join(__dirname, name);
@@ -340,9 +487,60 @@ ipcMain.handle('get-sessions', async () => {
     }
 
     syncOverlays(arr);
+    checkStatusChanges(arr);
     return arr;
   } catch (e) { return []; }
 });
 
-app.whenReady().then(() => { createWindow(); startOverlayLoop(); });
-app.on('window-all-closed', () => app.quit());
+// ---- Auto-update checker ----
+const PKG_VERSION = require('./package.json').version;
+
+async function checkForUpdates() {
+  try {
+    const { net } = require('electron');
+    const resp = await net.fetch('https://api.github.com/repos/mrxv39/claude_control/releases/latest');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const latest = (data.tag_name || '').replace(/^v/, '');
+    if (latest && latest !== PKG_VERSION) {
+      const url = data.html_url || 'https://github.com/mrxv39/claude_control/releases/latest';
+      mainWindow.webContents.send('update-available', latest, url);
+    }
+  } catch {}
+}
+
+// ---- Auto-setup hook check ----
+function checkHookSetup() {
+  try {
+    const settingsPath = path.join(process.env.USERPROFILE, '.claude', 'settings.json');
+    if (!fs.existsSync(settingsPath)) { mainWindow.webContents.send('hook-missing'); return; }
+    const content = fs.readFileSync(settingsPath, 'utf-8');
+    if (!content.includes('claude-state-hook')) {
+      mainWindow.webContents.send('hook-missing');
+    }
+  } catch { mainWindow.webContents.send('hook-missing'); }
+}
+
+ipcMain.handle('run-setup-hook', async () => {
+  try {
+    const script = resolveScript('setup-hook.ps1');
+    execSync(`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${script}"`,
+      { encoding: 'utf-8', timeout: 30000 });
+    return true;
+  } catch { return false; }
+});
+
+app.setAppUserModelId('com.claudio.monitor');
+app.whenReady().then(() => {
+  createWindow();
+  createTray();
+  startOverlayLoop();
+  // Check hook setup and updates after window loads
+  mainWindow.webContents.on('did-finish-load', () => {
+    checkHookSetup();
+    checkForUpdates();
+    setInterval(checkForUpdates, 6 * 60 * 60 * 1000); // every 6h
+  });
+});
+app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
+app.on('before-quit', () => { isQuitting = true; });

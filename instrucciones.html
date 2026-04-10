@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claudio Control - Instrucciones</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; line-height: 1.7; padding: 40px 20px; }
+  .container { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 28px; color: #7aa2f7; margin-bottom: 8px; }
+  .subtitle { color: #8b949e; font-size: 15px; margin-bottom: 36px; }
+  .step { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 24px; margin-bottom: 16px; }
+  .step-number { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: #7aa2f7; color: #0d1117; border-radius: 50%; font-weight: 700; font-size: 15px; margin-right: 12px; flex-shrink: 0; }
+  .step-title { font-size: 17px; font-weight: 600; color: #e6edf3; display: flex; align-items: center; margin-bottom: 12px; }
+  .step p { color: #b1bac4; font-size: 14px; margin-bottom: 8px; }
+  .step p:last-child { margin-bottom: 0; }
+  code { background: #1c2129; border: 1px solid #30363d; border-radius: 5px; padding: 2px 7px; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 13px; color: #f0883e; }
+  .code-block { background: #1c2129; border: 1px solid #30363d; border-radius: 8px; padding: 14px 18px; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 13px; color: #e6edf3; margin: 10px 0; overflow-x: auto; user-select: all; cursor: pointer; position: relative; }
+  .code-block:hover::after { content: 'click para seleccionar'; position: absolute; top: 4px; right: 8px; font-size: 10px; color: #484f58; font-family: 'Segoe UI', sans-serif; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .download-btn { display: inline-block; background: #238636; color: #fff; padding: 12px 28px; border-radius: 8px; font-size: 16px; font-weight: 600; text-decoration: none; margin: 10px 0; transition: background 0.2s; }
+  .download-btn:hover { background: #2ea043; text-decoration: none; }
+  .tip { background: #1a2332; border-left: 3px solid #58a6ff; padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+  .tip-title { color: #58a6ff; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .tip p { color: #8b949e; font-size: 13px; }
+  .colors { display: flex; gap: 16px; margin: 10px 0; }
+  .color-item { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot-green { background: #9ece6a; }
+  .dot-red { background: #f7768e; }
+  .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
+  .feature { background: #1c2129; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+  .feature-icon { font-size: 20px; margin-bottom: 6px; }
+  .feature-name { font-size: 13px; font-weight: 600; color: #e6edf3; }
+  .feature-desc { font-size: 12px; color: #8b949e; margin-top: 4px; }
+  .section-title { font-size: 20px; color: #7aa2f7; margin: 32px 0 16px 0; font-weight: 600; }
+  .prereq { display: flex; align-items: center; gap: 8px; padding: 6px 0; color: #b1bac4; font-size: 14px; }
+  .check { color: #3fb950; font-weight: bold; }
+  hr { border: none; border-top: 1px solid #21262d; margin: 32px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <h1>Claudio Control</h1>
+  <p class="subtitle">Monitor visual de sesiones Claude Code para Windows Terminal</p>
+
+  <div class="feature-grid">
+    <div class="feature">
+      <div class="feature-icon">&#127912;</div>
+      <div class="feature-name">Barra visual</div>
+      <div class="feature-desc">Un chip por cada sesion de Claude, con colores segun su estado</div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">&#128269;</div>
+      <div class="feature-name">Click para enfocar</div>
+      <div class="feature-desc">Pulsa un chip y la ventana de esa sesion salta al frente</div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">&#9638;&#9638;</div>
+      <div class="feature-name">Auto-mosaico</div>
+      <div class="feature-desc">Ctrl+Click en varios chips y las ventanas se organizan solas</div>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">&#9881;</div>
+      <div class="feature-name">Detecta servicios</div>
+      <div class="feature-desc">Ve si tu proyecto tiene un servidor o build corriendo</div>
+    </div>
+  </div>
+
+  <div class="colors">
+    <div class="color-item"><span class="dot dot-green"></span> <span style="font-size:14px">Verde = Claude trabajando</span></div>
+    <div class="color-item"><span class="dot dot-red"></span> <span style="font-size:14px">Rojo = esperando tu input</span></div>
+  </div>
+
+  <hr>
+
+  <div class="section-title">Requisitos</div>
+  <div class="prereq"><span class="check">&#10003;</span> Windows 10 u 11</div>
+  <div class="prereq"><span class="check">&#10003;</span> Windows Terminal (viene preinstalado en Win 11)</div>
+  <div class="prereq"><span class="check">&#10003;</span> Claude Code CLI instalado y funcionando</div>
+
+  <hr>
+
+  <div class="section-title">Instalacion (5 minutos)</div>
+
+  <div class="step">
+    <div class="step-title"><span class="step-number">1</span> Descarga el .exe</div>
+    <p>No necesitas instalar nada mas. Es un archivo portable.</p>
+    <a class="download-btn" href="https://github.com/mrxv39/claude_control/releases/latest">&#11015; Descargar ClaudioControl.exe</a>
+  </div>
+
+  <div class="step">
+    <div class="step-title"><span class="step-number">2</span> Ponlo en una carpeta</div>
+    <p>Crea una carpeta donde quieras y mete ahi el <code>.exe</code>. Por ejemplo:</p>
+    <div class="code-block">C:\ClaudioControl\ClaudioControl.exe</div>
+  </div>
+
+  <div class="step">
+    <div class="step-title"><span class="step-number">3</span> Ejecuta el .exe</div>
+    <p>Haz doble click en <code>ClaudioControl.exe</code>. Te aparecera una barrita en la parte superior de la pantalla.</p>
+    <div class="tip">
+      <div class="tip-title">&#128161; Windows puede mostrar una alerta</div>
+      <p>Si te sale "Windows protegió tu PC", pulsa <strong>"Mas informacion"</strong> y luego <strong>"Ejecutar de todos modos"</strong>. Es normal con apps sin firmar.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-title"><span class="step-number">4</span> Configura el hook (solo una vez)</div>
+    <p>Esto le dice a Claude Code que avise a la app cuando empieza o termina de trabajar. Abre <strong>PowerShell</strong> y pega este comando:</p>
+    <div class="code-block">& "C:\ClaudioControl\resources\setup-hook.ps1"</div>
+    <p>Cambia la ruta si pusiste el <code>.exe</code> en otro sitio. Te saldra un mensaje verde de confirmacion.</p>
+    <div class="tip">
+      <div class="tip-title">&#9888; Si te da error de permisos</div>
+      <p>Ejecuta primero esto en PowerShell (solo una vez):</p>
+    </div>
+    <div class="code-block">Set-ExecutionPolicy RemoteSigned -Scope CurrentUser</div>
+  </div>
+
+  <div class="step">
+    <div class="step-title"><span class="step-number">5</span> Listo!</div>
+    <p>Abre sesiones de Claude Code en Windows Terminal y veraslas aparecer como chips en la barra.</p>
+  </div>
+
+  <hr>
+
+  <div class="section-title">Como se usa</div>
+
+  <div class="step">
+    <div class="step-title">Click normal en un chip</div>
+    <p>Trae la ventana de esa sesion al frente. Si el proyecto tiene un servicio corriendo (ej: un servidor de desarrollo), veras un badge debajo &mdash; haz click en el badge para traer esa ventana.</p>
+  </div>
+
+  <div class="step">
+    <div class="step-title">Ctrl + Click para organizar ventanas en mosaico</div>
+    <p>Manten pulsada la tecla <code>Ctrl</code> y haz click en los chips de las sesiones que quieras ver a la vez. Se seleccionaran (borde azul) y <strong>las ventanas se colocaran automaticamente en mosaico</strong>:</p>
+    <p>
+      <strong>2 ventanas</strong> &rarr; lado a lado<br>
+      <strong>3 ventanas</strong> &rarr; tres columnas<br>
+      <strong>4 ventanas</strong> &rarr; cuadricula 2x2<br>
+      <strong>5 o mas</strong> &rarr; cuadricula automatica
+    </p>
+    <p>Para quitar una ventana de la seleccion, <code>Ctrl+Click</code> otra vez en su chip. Para limpiar la seleccion, haz click normal (sin Ctrl) en cualquier chip.</p>
+  </div>
+
+  <div class="step">
+    <div class="step-title">Arrastra la barra</div>
+    <p>La barra empieza centrada arriba, pero puedes arrastrarla donde quieras y recordara la posicion.</p>
+  </div>
+
+  <hr>
+
+  <p style="color:#484f58; font-size:12px; text-align:center; margin-top:24px;">
+    Claudio Control &mdash; <a href="https://github.com/mrxv39/claude_control">github.com/mrxv39/claude_control</a>
+  </p>
+
+</div>
+</body>
+</html>

@@ -90,23 +90,32 @@ foreach ($s in $shells) {
     }
 
     # Override status from hook state file (more reliable than process-tree heuristic)
+    # Claude may report cwd as a subdirectory (e.g. project/src-tauri instead of project),
+    # so we scan all state files for ones whose cwd starts with the shell's cwd and pick the newest.
     $hwnd = 0
     if ($isClaude -and $cwd -ne 'N/A') {
         try {
-            $sha = [System.Security.Cryptography.SHA1]::Create()
-            $hb  = [System.Text.Encoding]::UTF8.GetBytes($cwd.ToLower())
-            $hash = ([BitConverter]::ToString($sha.ComputeHash($hb)) -replace '-','').Substring(0,16)
-            $stateFile = Join-Path $env:USERPROFILE ".claude\claudio-state\$hash.json"
-            if (Test-Path $stateFile) {
-                $st = Get-Content $stateFile -Raw | ConvertFrom-Json
-                # Stale-guard: ignore if older than 1 hour
-                $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$st.ts
-                if ($age -lt 3600) {
-                    $status = $st.status
-                    if ($status -eq 'BUSY') { $running = 'claude (working)' }
-                    elseif ($status -eq 'WAITING') { $running = 'claude (idle)' }
+            $stateDir = Join-Path $env:USERPROFILE '.claude\claudio-state'
+            $bestSt = $null
+            $bestTs = 0
+            $cwdLower = $cwd.ToLower()
+            foreach ($sf in (Get-ChildItem $stateDir -Filter '*.json' -ErrorAction SilentlyContinue)) {
+                $stCandidate = Get-Content $sf.FullName -Raw | ConvertFrom-Json
+                $stCwd = if ($stCandidate.cwd) { $stCandidate.cwd.ToLower() } else { '' }
+                # Match: state cwd equals shell cwd OR is a subdirectory of it
+                if ($stCwd -eq $cwdLower -or $stCwd.StartsWith($cwdLower + '\')) {
+                    $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$stCandidate.ts
+                    if ($age -lt 3600 -and [int64]$stCandidate.ts -gt $bestTs) {
+                        $bestSt = $stCandidate
+                        $bestTs = [int64]$stCandidate.ts
+                    }
                 }
-                if ($st.hwnd) { $hwnd = [int64]$st.hwnd }
+            }
+            if ($bestSt) {
+                $status = $bestSt.status
+                if ($status -eq 'BUSY') { $running = 'claude (working)' }
+                elseif ($status -eq 'WAITING') { $running = 'claude (idle)' }
+                if ($bestSt.hwnd) { $hwnd = [int64]$bestSt.hwnd }
             }
         } catch {}
     }
