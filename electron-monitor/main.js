@@ -285,13 +285,20 @@ function startOverlayLoop() {
   overlayPollTimer = setInterval(repositionOverlays, 100);
 }
 
+// Resolve script paths: packaged app puts them in resources/, dev uses __dirname
+function resolveScript(name) {
+  const dev = path.join(__dirname, name);
+  if (require('fs').existsSync(dev)) return dev;
+  return path.join(process.resourcesPath, name);
+}
+
 // Sync overlays whenever renderer fetches sessions
 const _origGetSessions = ipcMain._invokeHandlers && ipcMain._invokeHandlers.get('get-sessions');
 ipcMain.removeHandler('get-sessions');
 ipcMain.handle('get-sessions', async () => {
   try {
     const r = execSync(
-      `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(__dirname, 'get-sessions.ps1')}"`,
+      `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${resolveScript('get-sessions.ps1')}"`,
       { encoding: 'utf-8', timeout: 15000 }
     ).trim();
     if (!r) { syncOverlays([]); return []; }

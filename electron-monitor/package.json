@@ -1,12 +1,50 @@
 {
   "name": "claudio-monitor",
   "version": "1.0.0",
+  "description": "Visual session monitor for Claude Code on Windows Terminal",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win portable --config.win.signAndEditExecutable=false"
   },
+  "build": {
+    "appId": "com.claudio.monitor",
+    "productName": "Claudio Control",
+    "win": {
+      "target": "portable",
+      "icon": null
+    },
+    "portable": {
+      "artifactName": "ClaudioControl.exe"
+    },
+    "files": [
+      "main.js",
+      "index.html",
+      "get-sessions.ps1",
+      "claude-state-hook.ps1",
+      "node_modules/koffi/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "get-sessions.ps1",
+        "to": "get-sessions.ps1"
+      },
+      {
+        "from": "claude-state-hook.ps1",
+        "to": "claude-state-hook.ps1"
+      },
+      {
+        "from": "setup-hook.ps1",
+        "to": "setup-hook.ps1"
+      }
+    ]
+  },
+  "author": "mrxv39",
   "dependencies": {
-    "electron": "^35.0.0",
     "koffi": "^2.15.5"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.8.1"
   }
 }
