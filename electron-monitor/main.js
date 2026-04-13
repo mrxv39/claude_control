@@ -117,7 +117,6 @@ function createTray() {
     { label: 'Salir', click: () => { isQuitting = true; app.quit(); } }
   ]);
   tray.setContextMenu(menu);
-  tray.on('click', () => { mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver'); });
 }
 
 // IPC: hide bar (from ✕ button)
@@ -287,39 +286,45 @@ function syncOverlays(sessions) {
 }
 
 function repositionOverlays() {
+  if (isQuitting) return;
   for (const [h, info] of overlays) {
-    if (!IsWindow(h) || !IsWindowVisible(h) || IsIconic(h)) {
-      if (info.win.isVisible()) info.win.hide();
-      continue;
-    }
-    const r = {};
-    if (!GetWindowRect(h, r)) continue;
-    const wWidth = r.right - r.left;
-    const wHeight = r.bottom - r.top;
-    // Hit-test: probe a point inside the WT window's title area; if the topmost
-    // window there isn't this WT window (or one of its children), it's occluded.
-    // Probe a point clearly inside WT's client area, away from where our own
-    // overlay sits (centered top), to avoid hitting the overlay itself.
-    const probeX = r.left + 20;
-    const probeY = r.top + 50;
-    let occluded = false;
+    if (!info.win || info.win.isDestroyed()) { overlays.delete(h); continue; }
     try {
-      const hit = WindowFromPoint({ x: probeX, y: probeY });
-      if (hit) {
-        const root = GetAncestor(hit, 2 /* GA_ROOT */) || hit;
-        if (Number(root) !== Number(h)) occluded = true;
-      } else {
-        occluded = true;
+      if (!IsWindow(h) || !IsWindowVisible(h) || IsIconic(h)) {
+        if (info.win.isVisible()) info.win.hide();
+        continue;
       }
-    } catch {}
-    if (occluded) {
-      if (info.win.isVisible()) info.win.hide();
-      continue;
+      const r = {};
+      if (!GetWindowRect(h, r)) continue;
+      const wWidth = r.right - r.left;
+      const wHeight = r.bottom - r.top;
+      // Hit-test: probe a point inside the WT window's title area; if the topmost
+      // window there isn't this WT window (or one of its children), it's occluded.
+      // Probe a point clearly inside WT's client area, away from where our own
+      // overlay sits (centered top), to avoid hitting the overlay itself.
+      const probeX = r.left + 20;
+      const probeY = r.top + 50;
+      let occluded = false;
+      try {
+        const hit = WindowFromPoint({ x: probeX, y: probeY });
+        if (hit) {
+          const root = GetAncestor(hit, 2 /* GA_ROOT */) || hit;
+          if (Number(root) !== Number(h)) occluded = true;
+        } else {
+          occluded = true;
+        }
+      } catch {}
+      if (occluded) {
+        if (info.win.isVisible()) info.win.hide();
+        continue;
+      }
+      const x = r.left + Math.floor((wWidth - OVERLAY_W) / 2);
+      const y = r.top + 4;
+      info.win.setBounds({ x, y, width: OVERLAY_W, height: OVERLAY_H });
+      if (!info.win.isVisible()) info.win.showInactive();
+    } catch {
+      overlays.delete(h);
     }
-    const x = r.left + Math.floor((wWidth - OVERLAY_W) / 2);
-    const y = r.top + 4;
-    info.win.setBounds({ x, y, width: OVERLAY_W, height: OVERLAY_H });
-    if (!info.win.isVisible()) info.win.showInactive();
   }
 }
 
@@ -531,6 +536,17 @@ ipcMain.handle('run-setup-hook', async () => {
 });
 
 app.setAppUserModelId('com.claudio.monitor');
+
+// Single instance lock — if already running, focus the existing one
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+  process.exit(0);
+}
+app.on('second-instance', () => {
+  if (mainWindow) { mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver'); }
+});
+
 app.whenReady().then(() => {
   createWindow();
   createTray();
@@ -543,4 +559,13 @@ app.whenReady().then(() => {
   });
 });
 app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
-app.on('before-quit', () => { isQuitting = true; });
+app.on('before-quit', () => {
+  isQuitting = true;
+  // Stop the overlay loop BEFORE destroying windows to avoid accessing destroyed objects
+  if (overlayPollTimer) { clearInterval(overlayPollTimer); overlayPollTimer = null; }
+  // Destroy all overlays explicitly
+  for (const [, info] of overlays) {
+    try { if (info.win && !info.win.isDestroyed()) info.win.destroy(); } catch {}
+  }
+  overlays.clear();
+});
