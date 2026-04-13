@@ -118,6 +118,16 @@ Arranca centrada horizontalmente. Si el usuario la arrastra, recuerda la posici�
 - **chime.wav**: se genera automáticamente en `~/.claude/claudio-state/chime.wav`. Borrar para regenerar.
 - **Hook config**: en `~/.claude/settings.json`, eventos `UserPromptSubmit` (BUSY) y `Stop`/`SessionStart` (WAITING). Se configura automáticamente con `setup-hook.ps1` o desde el chip amarillo.
 
+## Degradación de contexto
+
+Cada chip Claude muestra una barra de progreso (3px) indicando el % de contexto usado (de 1M tokens).
+
+- **Fuente**: `get-sessions.ps1` lee los últimos 32KB del JSONL de conversación (`~/.claude/projects/<cwd-dashes>/<sessionId>.jsonl`), extrae `cache_read_input_tokens + cache_creation_input_tokens + input_tokens` del último mensaje assistant.
+- **Cálculo**: `total_tokens / 10000` = % de 1M.
+- **Path del JSONL**: cwd con `:\` → `--`, `\` y `/` → `-`, `_` → `-` (ej: `C:\Users\foo\bar_baz` → `C--Users-foo-bar-baz`).
+- **Colores**: verde (<50%), amarillo (50-80%), rojo (>80%).
+- **Tooltip**: muestra `Contexto: X%`.
+
 ## Pendientes / cosas frágiles
 
 - HWND de Claude solo se captura en eventos `BUSY`. Para servicios, match por título de ventana; si no coincide, fallback por posición horizontal.

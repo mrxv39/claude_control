@@ -24,6 +24,8 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
 .idle .dot { background:#f7768e; }
 .name { font-size:12px; font-weight:500; color:#c0caf5; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
 .run { font-size:10px; color:#565f89; }
+.ctx-bar { width:100%; height:3px; border-radius:1.5px; background:rgba(255,255,255,.08); margin-top:2px; overflow:hidden; }
+.ctx-fill { height:100%; border-radius:1.5px; transition: width 0.5s ease; }
 .stats { font-size:11px; color:#565f89; flex-shrink:0; margin-left:8px; }
 .svc { font-size:9px; color:#7aa2f7; background:rgba(122,162,247,.15); padding:1px 6px; border-radius:3px; cursor:pointer; }
 .svc:hover { background:rgba(122,162,247,.35); filter:brightness(1.2); }
@@ -92,7 +94,8 @@ function render(sessions) {
     const d = document.createElement('div');
     d.className = 'chip ' + s.status.toLowerCase();
     if (s.hwnd && selected.has(s.hwnd)) d.classList.add('selected');
-    d.title = `${s.project}\n${s.cwd || ''}\nEstado: ${s.status}\nPID: ${s.pid}`;
+    const ctx = s.contextPercent || 0;
+    d.title = `${s.project}\n${s.cwd || ''}\nEstado: ${s.status}\nContexto: ${ctx}%\nPID: ${s.pid}`;
     const run = s.running !== '-' ? ` <span class="run">[${s.running}]</span>` : '';
 
     // Build main row
@@ -100,6 +103,15 @@ function render(sessions) {
     mainDiv.className = 'chip-main';
     mainDiv.innerHTML = `<span class="dot"></span><span class="name">${s.project}</span>${run}`;
     d.appendChild(mainDiv);
+
+    // Context usage bar (only for Claude sessions)
+    if (s.isClaude && ctx > 0) {
+      const barColor = ctx < 50 ? '#9ece6a' : ctx < 80 ? '#e0af68' : '#f7768e';
+      const bar = document.createElement('div');
+      bar.className = 'ctx-bar';
+      bar.innerHTML = `<div class="ctx-fill" style="width:${Math.min(ctx,100)}%;background:${barColor}"></div>`;
+      d.appendChild(bar);
+    }
 
     // Build service row with clickable badges
     if (s.services.length) {

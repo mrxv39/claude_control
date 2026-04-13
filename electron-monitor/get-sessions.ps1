@@ -93,6 +93,7 @@ foreach ($s in $shells) {
     # Claude may report cwd as a subdirectory (e.g. project/src-tauri instead of project),
     # so we scan all state files for ones whose cwd starts with the shell's cwd and pick the newest.
     $hwnd = 0
+    $contextPercent = 0
     if ($isClaude -and $cwd -ne 'N/A') {
         try {
             $stateDir = Join-Path $env:USERPROFILE '.claude\claudio-state'
@@ -116,6 +117,34 @@ foreach ($s in $shells) {
                 if ($status -eq 'BUSY') { $running = 'claude (working)' }
                 elseif ($status -eq 'WAITING') { $running = 'claude (idle)' }
                 if ($bestSt.hwnd) { $hwnd = [int64]$bestSt.hwnd }
+                # Read context usage from conversation JSONL
+                if ($bestSt.sessionId -and $cwd -ne 'N/A') {
+                    try {
+                        $folderName = $cwd -replace ':\\', '--' -replace '\\', '-' -replace '/', '-' -replace '_', '-'
+                        $jsonlPath = Join-Path $env:USERPROFILE ".claude\projects\$folderName\$($bestSt.sessionId).jsonl"
+                        if (Test-Path $jsonlPath) {
+                            $fs = [System.IO.File]::OpenRead($jsonlPath)
+                            $tailSize = [math]::Min(32768, $fs.Length)
+                            $fs.Seek(-$tailSize, [System.IO.SeekOrigin]::End) | Out-Null
+                            $rdr = New-Object System.IO.StreamReader($fs)
+                            $tail = $rdr.ReadToEnd()
+                            $rdr.Close(); $fs.Close()
+                            # Sum input_tokens + cache_read + cache_creation from last assistant message usage
+                            $lines = $tail -split "`n"
+                            for ($li = $lines.Count - 1; $li -ge 0; $li--) {
+                                if ($lines[$li] -match '"type"\s*:\s*"assistant"' -and $lines[$li] -match '"cache_read_input_tokens"\s*:\s*(\d+)') {
+                                    $cacheRead = [int64]$Matches[1]
+                                    $cacheCreate = 0; $inpTok = 0
+                                    if ($lines[$li] -match '"cache_creation_input_tokens"\s*:\s*(\d+)') { $cacheCreate = [int64]$Matches[1] }
+                                    if ($lines[$li] -match '"input_tokens"\s*:\s*(\d+)') { $inpTok = [int64]$Matches[1] }
+                                    $totalCtx = $cacheRead + $cacheCreate + $inpTok
+                                    $contextPercent = [math]::Round($totalCtx / 10000)  # % of 1M
+                                    break
+                                }
+                            }
+                        }
+                    } catch {}
+                }
             }
         } catch {}
     }
@@ -131,15 +160,16 @@ foreach ($s in $shells) {
     }
 
     $results += [PSCustomObject]@{
-        pid      = $s.ProcessId
-        tabIndex = $idx
-        hwnd     = $hwnd
-        status   = $status
-        project  = $project
-        cwd      = $cwd
-        running  = $running
-        isClaude = $isClaude
-        shell    = ($s.Name -replace '\.exe$', '')
+        pid            = $s.ProcessId
+        tabIndex       = $idx
+        hwnd           = $hwnd
+        status         = $status
+        project        = $project
+        cwd            = $cwd
+        running        = $running
+        isClaude       = $isClaude
+        shell          = ($s.Name -replace '\.exe$', '')
+        contextPercent = if ($contextPercent) { $contextPercent } else { 0 }
     }
 }
 
