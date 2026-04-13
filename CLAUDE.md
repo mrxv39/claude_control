@@ -5,7 +5,7 @@ Monitor visual de sesiones Claude Code corriendo en Windows Terminal. Barra siem
 ## Componentes
 
 - **`electron-monitor/`** — app Electron principal (la barra + overlays + tile + tray + notificaciones).
-  - `main.js` — proceso principal. Win32 vía koffi (`user32.dll`). Maneja IPC: `get-sessions`, `focus-wt`, `tile-windows`, `resize-bar`, `hide-bar`, `run-setup-hook`. Loop de 100ms reposiciona overlays (con guard `isQuitting` y `isDestroyed()` para evitar crash al cerrar). Enumera ventanas WT con `FindWindowExA` para asignar HWNDs a sesiones sin hook. La barra arranca centrada y recuerda posición. **Single instance** vía `requestSingleInstanceLock()`: si ya hay una instancia corriendo, la segunda se cierra y muestra la existente. **System tray**: el botón ✕ esconde la barra, click/derecho en tray muestra menú (Mostrar/Salir). **Notificaciones**: toast custom (BrowserWindow) + chime WAV generado programáticamente (E6→B5) cuando una sesión pasa de BUSY→WAITING. **Auto-update**: consulta GitHub Releases API al arrancar y cada 6h; si hay versión nueva, envía `update-available` al renderer. **Auto-setup**: comprueba si `~/.claude/settings.json` contiene el hook; si no, envía `hook-missing` al renderer.
+  - `main.js` — proceso principal. Win32 vía koffi (`user32.dll`). Maneja IPC: `get-sessions`, `focus-wt`, `tile-windows`, `resize-bar`, `hide-bar`, `run-setup-hook`. Loop de 33ms reposiciona overlays (con guard `isQuitting` y `isDestroyed()` para evitar crash al cerrar). Enumera ventanas WT con `FindWindowExA` para asignar HWNDs a sesiones sin hook. **Auto-tile**: al detectar cambio en el set de ventanas WT visibles, las redistribuye automáticamente (1=50% izq, 2=50%+50%, 3=33%×3, 4=2×2). **Toggle minimize**: click en chip enfoca la ventana; segundo click en el mismo chip la minimiza (`lastFocusedViaChip`). La barra arranca centrada y recuerda posición. **Single instance** vía `requestSingleInstanceLock()`: si ya hay una instancia corriendo, la segunda se cierra y muestra la existente. **System tray**: el botón ✕ esconde la barra, click/derecho en tray muestra menú (Mostrar/Salir). **Notificaciones**: toast custom (BrowserWindow) + chime WAV generado programáticamente (E6→B5) cuando una sesión pasa de BUSY→WAITING. **Auto-update**: consulta GitHub Releases API al arrancar y cada 6h; si hay versión nueva, envía `update-available` al renderer. **Auto-setup**: comprueba si `~/.claude/settings.json` contiene el hook; si no, envía `hook-missing` al renderer.
   - `index.html` — renderer de la barra. Renderiza chips, gestiona selección multi (Ctrl+click), pide resize (debounced, 100ms) a main. Agrupa sesiones por `cwd`: sesiones Claude + servicios con mismo directorio se fusionan en un solo chip con badges clickables debajo. Tooltips con nombre, cwd, estado, PID. Nombres largos truncados con `text-overflow: ellipsis` (max 160px). Escucha eventos IPC: `update-available` (chip amarillo "Update vX.X"), `hook-missing` (chip amarillo "Configurar hook" con un click).
   - `get-sessions.ps1` — enumera shells hijos de `WindowsTerminal.exe`, detecta Claude, lee estado del hook. Lee `cwd` real vía PEB walk (`NtQueryInformationProcess` + `ReadProcessMemory`). **Fallback CWD**: si la shell reporta `$USERPROFILE`, lee CWD del proceso hijo. **State file lookup**: escanea TODOS los state files cuyo `cwd` sea el directorio de la shell O un subdirectorio suyo, y usa el más reciente (fix: Claude a veces reporta subcarpetas como `project/src-tauri`). **Nombres descriptivos**: `npm run X` → `npm:X`, `tauri dev/build` → `tauri dev`, `cargo run/build/test` → `cargo run`.
   - `claude-state-hook.ps1` — hook de Claude Code. Escribe `~/.claude/claudio-state/<sha1(cwd)>.json`. Solo en `BUSY` captura `GetForegroundWindow()` + verifica `ClassName == 'CASCADIA_HOSTING_WINDOW_CLASS'`. Cachea HWND 5 min.
@@ -36,25 +36,34 @@ WT puede tener **múltiples ventanas en un único proceso** `WindowsTerminal.exe
 Sesiones sin HWND (no han disparado BUSY, o son servicios):
 - `main.js` enumera ventanas WT con `FindWindowExA` y hace match por título de ventana vs nombre de proyecto.
 - Si hay match, asigna el HWND.
-- Si no, fallback al método antiguo (no fiable con 2+ ventanas WT).
+- **Fallback por posición**: si quedan N sesiones sin HWND y N ventanas WT sin asignar, se emparejan por posición horizontal (izquierda a derecha vía `GetWindowRect`).
 - Para servicios agrupados, fallback al HWND de la sesión Claude del mismo grupo.
 
 ## Overlays de título
 
-`main.js` crea un `BrowserWindow` por sesión (frame:false, transparent:true, alwaysOnTop, focusable:false, ignoreMouseEvents) y un loop de 100ms:
+`main.js` crea un `BrowserWindow` por sesión (frame:false, transparent:true, alwaysOnTop, focusable:false, ignoreMouseEvents, show:false) y un loop de 33ms:
 
-- `GetWindowRect` para reposicionar el overlay centrado en la barra de título de cada WT.
-- Hit-test en `(left+20, top+50)` con `WindowFromPoint` + `GetAncestor(GA_ROOT)`: si la topmost en ese punto no es la WT, el overlay se oculta.
-- Si `IsIconic` o `!IsWindowVisible` → ocultar.
-- Guard: si `isQuitting` o `win.isDestroyed()`, skip/delete del Map (evita crash al cerrar).
+- Espera `ready-to-show` antes de mostrar (evita flash de ventana vacía).
+- Ocupa todo el ancho de la ventana WT menos 140px a la derecha (no tapa botones min/max/cerrar).
+- **Colores por estado**: fondo verde sólido (BUSY) o rojo sólido (WAITING/IDLE), texto oscuro contrastante.
+- `GetWindowRect` para reposicionar el overlay pegado a la barra de título de cada WT.
+- **Occlusion test**: hit-test en el **centro** de la ventana WT con `WindowFromPoint` + `GetAncestor(GA_ROOT)`. Si otra ventana tapa ese punto, el overlay se oculta. Probar en el centro evita falsos positivos con la barra Claudio (always-on-top en la parte superior).
+- Si `IsIconic` o `!IsWindowVisible` → `hide()`.
+- Guard: si `isQuitting` o `win.isDestroyed()`, skip/delete del Map.
 
-## Tile
+## Auto-tile
 
-Ctrl+click en chips los añade/quita de un `Set` de selección. En cuanto hay 2+, se llama `tile-windows` con los HWNDs y `MoveWindow` los reparte:
+Las ventanas WT se redistribuyen automáticamente cuando el set de ventanas visibles cambia (nueva ventana aparece o una se cierra/minimiza). No requiere interacción del usuario.
 
-- 1: full · 2: 2x1 · 3: 3x1 · 4: 2x2 · N≥5: `cols=ceil(sqrt(N))`, `rows=ceil(N/cols)`
+- 1: 50% izquierda · 2: 50%+50% lado a lado · 3: 33%×3 · 4: 2×2 · N≥5: `cols=ceil(sqrt(N))`, `rows=ceil(N/cols)`
 - Origen `y = workArea.y + 48` para no taparse con la barra siempre-encima.
 - `ShowWindow(h, 9)` (SW_RESTORE) antes de mover por si está maximizada.
+- Solo re-tile cuando el set de HWNDs cambia (`prevAutoTileHwnds`), no en cada refresh.
+- Enumera todas las ventanas WT visibles con `enumWtWindows()` (no depende de HWNDs de sesión).
+
+## Tile manual
+
+Ctrl+click en chips los añade/quita de un `Set` de selección. En cuanto hay 2+, se llama `tile-windows` con los HWNDs seleccionados.
 
 ## Agrupado de sesiones por proyecto
 
@@ -111,8 +120,9 @@ Arranca centrada horizontalmente. Si el usuario la arrastra, recuerda la posici�
 
 ## Pendientes / cosas frágiles
 
-- HWND de Claude solo se captura en eventos `BUSY`. Para servicios, match por título de ventana; si no coincide, HWND queda en 0.
+- HWND de Claude solo se captura en eventos `BUSY`. Para servicios, match por título de ventana; si no coincide, fallback por posición horizontal.
 - Si el usuario mueve una sesión Claude a otra ventana WT (drag tab out), el HWND cacheado queda obsoleto hasta que pasen 5 min o se borre el state file.
+- El toggle minimize usa `lastFocusedViaChip` (último HWND enfocado por click en chip), no `GetForegroundWindow` (que siempre devuelve la barra Electron por ser always-on-top).
 - CWD fallback a proceso hijo solo se activa si el CWD de la shell es exactamente `$USERPROFILE`.
 - State file lookup escanea subdirectorios del cwd, lo que añade I/O. Con muchos state files (50+) podría ralentizar el refresh.
 - El chime se reproduce con `powershell.exe` síncrono — bloquea el main process ~0.5s. Si molesta, considerar reproducción asíncrona.

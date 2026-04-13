@@ -7,6 +7,7 @@ const koffi = require('koffi');
 // Win32
 const user32 = koffi.load('user32.dll');
 const FindWindowA = user32.func('intptr __stdcall FindWindowA(str cls, str title)');
+const GetForegroundWindow = user32.func('intptr __stdcall GetForegroundWindow()');
 const ShowWindow = user32.func('bool __stdcall ShowWindow(intptr h, int c)');
 const IsIconic = user32.func('bool __stdcall IsIconic(intptr h)');
 const IsWindow = user32.func('bool __stdcall IsWindow(intptr h)');
@@ -22,6 +23,7 @@ const keybd_event = user32.func('void __stdcall keybd_event(uint8 vk, uint8 scan
 const FindWindowExA = user32.func('intptr __stdcall FindWindowExA(intptr parent, intptr after, str cls, str title)');
 const GetWindowThreadProcessId = user32.func('uint __stdcall GetWindowThreadProcessId(intptr h, _Out_ uint32 *pid)');
 const GetWindowTextW = user32.func('int __stdcall GetWindowTextW(intptr h, uint16 *buf, int max)');
+const GetClassNameA = user32.func('int __stdcall GetClassNameA(intptr h, uint8 *buf, int max)');
 
 // Enumerate all WT windows, returns Map<wtPid, [{hwnd, title}]>
 function enumWtWindows() {
@@ -171,13 +173,25 @@ ipcMain.handle('focus-wt', async (event, payload) => {
     }
 
     if (targetHwnd && IsWindow(targetHwnd)) {
+      if (lastFocusedViaChip === targetHwnd && !IsIconic(targetHwnd)) {
+        ShowWindow(targetHwnd, 6); // SW_MINIMIZE
+        lastFocusedViaChip = 0;
+        return 'MINIMIZED';
+      }
       focusWindow(targetHwnd);
+      lastFocusedViaChip = targetHwnd;
       return 'OK_HWND';
     }
 
     const hwnd = FindWindowA('CASCADIA_HOSTING_WINDOW_CLASS', null);
     if (!hwnd) return 'NO_WINDOW';
+    if (lastFocusedViaChip === Number(hwnd) && !IsIconic(hwnd)) {
+      ShowWindow(hwnd, 6); // SW_MINIMIZE
+      lastFocusedViaChip = 0;
+      return 'MINIMIZED';
+    }
     focusWindow(hwnd);
+    lastFocusedViaChip = Number(hwnd);
 
     if (tabIndex >= 1 && tabIndex <= 9) {
       setTimeout(() => {
@@ -236,51 +250,58 @@ ipcMain.handle('tile-windows', async (event, hwnds) => {
 });
 
 // ---- Title overlays: small frameless windows pinned to each WT window ----
-const overlays = new Map(); // hwnd -> { win, label }
-const OVERLAY_W = 220;
-const OVERLAY_H = 22;
+const overlays = new Map(); // hwnd -> { win, label, status, occludedCount }
+const OVERLAY_H = 33;
+const OVERLAY_BTN_MARGIN = 140; // space for WT minimize/maximize/close buttons
 
-function overlayHtml(label) {
+function overlayHtml(label, status) {
   const safe = String(label).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  const bg = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
+  const border = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
+  const textColor = status === 'BUSY' ? '#1a2e0a' : '#3a0a12';
   return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
 <!DOCTYPE html><html><body style="margin:0;padding:0;font-family:'Segoe UI',sans-serif;">
-<div style="background:#7aa2f7;color:#1a1b26;font-size:11px;font-weight:600;padding:3px 10px;border-radius:0 0 6px 6px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:16px;">${safe}</div>
+<div style="background:${bg};border:1px solid ${border};border-top:none;color:${textColor};font-size:16px;font-weight:700;padding:5px 15px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe}</div>
 </body></html>`);
 }
 
-function createOverlay(hwnd, label) {
+function createOverlay(hwnd, label, status) {
   const win = new BrowserWindow({
-    width: OVERLAY_W, height: OVERLAY_H,
+    width: 400, height: OVERLAY_H,
+    x: -9999, y: -9999,
     frame: false, transparent: true, alwaysOnTop: true,
     skipTaskbar: true, focusable: false, resizable: false,
     hasShadow: false, show: false,
     webPreferences: { nodeIntegration: false, contextIsolation: true }
   });
   win.setIgnoreMouseEvents(true);
-  win.loadURL(overlayHtml(label));
+  win.loadURL(overlayHtml(label, status));
   win.setAlwaysOnTop(true, 'screen-saver');
+  win._ready = false;
+  win.once('ready-to-show', () => { win._ready = true; win.showInactive(); });
   return win;
 }
 
 function syncOverlays(sessions) {
   const live = new Map();
   for (const s of sessions) {
-    if (s.hwnd && IsWindow(s.hwnd)) live.set(Number(s.hwnd), s.project || '?');
+    if (s.hwnd && IsWindow(s.hwnd)) live.set(Number(s.hwnd), { label: s.project || '?', status: s.status || 'IDLE' });
   }
   // Remove dead overlays
   for (const [h, info] of overlays) {
     if (!live.has(h)) { try { info.win.destroy(); } catch {} overlays.delete(h); }
   }
   // Create or update
-  for (const [h, label] of live) {
+  for (const [h, data] of live) {
     let info = overlays.get(h);
     if (!info) {
-      const win = createOverlay(h, label);
-      info = { win, label };
+      const win = createOverlay(h, data.label, data.status);
+      info = { win, label: data.label, status: data.status, offscreen: true };
       overlays.set(h, info);
-    } else if (info.label !== label) {
-      info.win.loadURL(overlayHtml(label));
-      info.label = label;
+    } else if (info.label !== data.label || info.status !== data.status) {
+      info.win.loadURL(overlayHtml(data.label, data.status));
+      info.label = data.label;
+      info.status = data.status;
     }
   }
 }
@@ -289,49 +310,90 @@ function repositionOverlays() {
   if (isQuitting) return;
   for (const [h, info] of overlays) {
     if (!info.win || info.win.isDestroyed()) { overlays.delete(h); continue; }
+    if (!info.win._ready) continue; // wait for HTML to render
     try {
       if (!IsWindow(h) || !IsWindowVisible(h) || IsIconic(h)) {
-        if (info.win.isVisible()) info.win.hide();
+        if (!info.offscreen) { info.win.hide(); info.offscreen = true; }
         continue;
       }
       const r = {};
       if (!GetWindowRect(h, r)) continue;
       const wWidth = r.right - r.left;
       const wHeight = r.bottom - r.top;
-      // Hit-test: probe a point inside the WT window's title area; if the topmost
-      // window there isn't this WT window (or one of its children), it's occluded.
-      // Probe a point clearly inside WT's client area, away from where our own
-      // overlay sits (centered top), to avoid hitting the overlay itself.
-      const probeX = r.left + 20;
-      const probeY = r.top + 50;
+      // Occlusion: probe center of WT window (avoids hitting bar/overlays at top)
+      const probeX = r.left + Math.floor(wWidth / 2);
+      const probeY = r.top + Math.floor(wHeight / 2);
       let occluded = false;
       try {
         const hit = WindowFromPoint({ x: probeX, y: probeY });
         if (hit) {
-          const root = GetAncestor(hit, 2 /* GA_ROOT */) || hit;
+          const root = GetAncestor(hit, 2) || hit;
           if (Number(root) !== Number(h)) occluded = true;
         } else {
           occluded = true;
         }
       } catch {}
       if (occluded) {
-        if (info.win.isVisible()) info.win.hide();
+        if (!info.offscreen) { info.win.hide(); info.offscreen = true; }
         continue;
       }
-      const x = r.left + Math.floor((wWidth - OVERLAY_W) / 2);
-      const y = r.top + 4;
-      info.win.setBounds({ x, y, width: OVERLAY_W, height: OVERLAY_H });
-      if (!info.win.isVisible()) info.win.showInactive();
+      const overlayW = Math.max(100, wWidth - OVERLAY_BTN_MARGIN);
+      info.win.setBounds({ x: r.left, y: r.top + 4, width: overlayW, height: OVERLAY_H });
+      if (info.offscreen) { info.win.showInactive(); info.offscreen = false; }
     } catch {
       overlays.delete(h);
     }
   }
 }
 
+// ---- Auto-tile: reposition WT windows when the set of sessions changes ----
+let prevAutoTileHwnds = []; // sorted array of hwnds from last auto-tile
+
+function autoTile(hwnds) {
+  const valid = hwnds.filter(h => h && IsWindow(h));
+  // Sort for stable comparison
+  const sorted = [...valid].sort((a, b) => a - b);
+  // Only re-tile when the set of windows actually changes
+  if (sorted.length === prevAutoTileHwnds.length &&
+      sorted.every((h, i) => h === prevAutoTileHwnds[i])) return;
+  prevAutoTileHwnds = sorted;
+
+  if (sorted.length === 0) return;
+
+  const { screen } = require('electron');
+  const wa = screen.getPrimaryDisplay().workArea;
+  const BAR_H = 48;
+  const x0 = wa.x;
+  const y0 = wa.y + BAR_H;
+  const w0 = wa.width;
+  const h0 = wa.height - BAR_H;
+
+  const n = sorted.length;
+  let cols, rows;
+  if (n === 1)      { cols = 2; rows = 1; } // 1 window = 50% width (left half)
+  else if (n === 2) { cols = 2; rows = 1; }
+  else if (n === 3) { cols = 3; rows = 1; }
+  else if (n === 4) { cols = 2; rows = 2; }
+  else { cols = Math.ceil(Math.sqrt(n)); rows = Math.ceil(n / cols); }
+
+  const cellW = Math.floor(w0 / cols);
+  const cellH = Math.floor(h0 / rows);
+
+  sorted.forEach((h, i) => {
+    const c = i % cols;
+    const r = Math.floor(i / cols);
+    ShowWindow(h, 9); // SW_RESTORE: unmaximize if needed
+    MoveWindow(h, x0 + c * cellW, y0 + r * cellH, cellW, cellH, true);
+  });
+}
+
+// Track the last HWND focused via chip click (for toggle minimize)
+let lastFocusedViaChip = 0;
+
 let overlayPollTimer = null;
 function startOverlayLoop() {
   if (overlayPollTimer) return;
-  overlayPollTimer = setInterval(repositionOverlays, 100);
+  overlayPollTimer = setInterval(repositionOverlays, 33);
 }
 
 // ---- Status change notifications (custom toast window) ----
@@ -483,16 +545,37 @@ ipcMain.handle('get-sessions', async () => {
             break;
           }
         }
-        // If still no match and only one unassigned window left, use it
-        if (!s.hwnd && unassigned.length === 1 && needHwnd.length === 1) {
-          s.hwnd = unassigned[0].hwnd;
-          unassigned.splice(0, 1);
+      }
+      // Fallback: assign remaining unassigned windows to remaining sessions by screen position
+      const stillNeed = needHwnd.filter(s => !s.hwnd);
+      if (stillNeed.length > 0 && unassigned.length > 0) {
+        // Sort unassigned windows left-to-right by x position
+        unassigned.sort((a, b) => {
+          const ra = {}, rb = {};
+          GetWindowRect(a.hwnd, ra); GetWindowRect(b.hwnd, rb);
+          return (ra.left || 0) - (rb.left || 0);
+        });
+        for (let i = 0; i < Math.min(stillNeed.length, unassigned.length); i++) {
+          stillNeed[i].hwnd = unassigned[i].hwnd;
         }
       }
     }
 
     syncOverlays(arr);
     checkStatusChanges(arr);
+
+    // Auto-tile: use all visible WT windows (not just session-assigned HWNDs)
+    const wtWindows2 = enumWtWindows();
+    const allWtHwnds = [];
+    for (const [, wins] of wtWindows2) {
+      for (const w of wins) {
+        if (w.hwnd && IsWindow(w.hwnd) && IsWindowVisible(w.hwnd) && !IsIconic(w.hwnd)) {
+          allWtHwnds.push(w.hwnd);
+        }
+      }
+    }
+    autoTile(allWtHwnds);
+
     return arr;
   } catch (e) { return []; }
 });
