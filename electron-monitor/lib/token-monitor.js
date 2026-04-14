@@ -149,7 +149,7 @@ function getRateLimits() {
  */
 function getCycleInfo() {
   const rl = getRateLimits();
-  if (!rl) return null;
+  if (!rl || !rl.fiveHour || !rl.sevenDay) return null;
 
   const now = Date.now() / 1000; // unix seconds
   const resetsAt = rl.fiveHour.resetsAt;

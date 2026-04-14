@@ -71,37 +71,34 @@ function createBranch(cwd, skill) {
 }
 
 /**
- * Return to the previous branch (master/main).
+ * Return to the main branch (master or main).
  */
-function returnToMainBranch(cwd) {
+async function returnToMainBranch(cwd) {
+  const main = await getMainBranch(cwd);
   return new Promise(resolve => {
-    // Try master first, then main
-    execFile('git', ['checkout', 'master'], { cwd, timeout: 10000 }, (err) => {
-      if (err) {
-        execFile('git', ['checkout', 'main'], { cwd, timeout: 10000 }, () => resolve());
-      } else {
-        resolve();
-      }
+    execFile('git', ['checkout', main], { cwd, timeout: 10000 }, () => resolve());
+  });
+}
+
+/**
+ * Detect the main branch name (master or main).
+ */
+function getMainBranch(cwd) {
+  return new Promise(resolve => {
+    execFile('git', ['rev-parse', '--verify', 'master'], { cwd, timeout: 5000 }, (err) => {
+      resolve(err ? 'main' : 'master');
     });
   });
 }
 
 /**
- * Check if a branch has any commits beyond what it branched from.
+ * Check if current branch has changes vs the main branch.
  */
-function branchHasCommits(cwd, branch) {
-  return new Promise(resolve => {
-    execFile('git', ['log', 'HEAD...HEAD~1', '--oneline'], { cwd, timeout: 5000 }, (err, stdout) => {
-      // Simple heuristic: check if branch differs from master
-      execFile('git', ['diff', 'master...HEAD', '--stat'], { cwd, timeout: 5000 }, (err2, stdout2) => {
-        if (err2) {
-          execFile('git', ['diff', 'main...HEAD', '--stat'], { cwd, timeout: 5000 }, (err3, stdout3) => {
-            resolve(stdout3 && stdout3.trim().length > 0);
-          });
-        } else {
-          resolve(stdout2 && stdout2.trim().length > 0);
-        }
-      });
+function branchHasCommits(cwd) {
+  return new Promise(async resolve => {
+    const main = await getMainBranch(cwd);
+    execFile('git', ['diff', `${main}...HEAD`, '--stat'], { cwd, timeout: 5000 }, (err, stdout) => {
+      resolve(!err && stdout && stdout.trim().length > 0);
     });
   });
 }
@@ -157,18 +154,17 @@ async function execute(task, onProgress) {
     const proc = spawn('claude', args, {
       cwd: task.projectPath,
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: false,
-      env: { ...process.env }
+      shell: false
     });
 
     // Close stdin immediately — --print doesn't need input
     proc.stdin.end();
 
     // Manual watchdog: kill process after WATCHDOG_MS
+    // On Windows, kill() always does TerminateProcess (SIGTERM/SIGKILL are equivalent)
     const watchdog = setTimeout(() => {
       logStream.write(`\n=== WATCHDOG: killing after ${WATCHDOG_MS / 1000}s ===\n`);
-      try { proc.kill('SIGTERM'); } catch {}
-      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5000);
+      try { proc.kill(); } catch {}
     }, WATCHDOG_MS);
 
     let output = '';
@@ -190,11 +186,8 @@ async function execute(task, onProgress) {
       logStream.write(`\n=== Finished (code ${code}) in ${duration}s ===\n`);
       logStream.end();
 
-      // Track duration only — budget disabled for Max plan
-      const estimatedCost = 0;
-
       // Check if branch has actual changes
-      const hasChanges = await branchHasCommits(task.projectPath, branch);
+      const hasChanges = await branchHasCommits(task.projectPath);
 
       // Return to master
       await returnToMainBranch(task.projectPath);
@@ -207,7 +200,6 @@ async function execute(task, onProgress) {
       const result = {
         status: code === 0 ? 'done' : 'failed',
         branch: hasChanges ? branch : null,
-        costUsd: estimatedCost,
         logFile,
         duration,
         hasChanges

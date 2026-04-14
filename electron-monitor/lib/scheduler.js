@@ -44,10 +44,7 @@ function isOutsideWorkHours() {
   }
 }
 
-function hasBudget() {
-  // Budget disabled for Max plan — tokens are prepaid, unused = wasted
-  return true;
-}
+// Budget disabled for Max plan — tokens are prepaid, unused = wasted
 
 async function hasUserBusySessions() {
   if (!getSessionsFn) return false;
@@ -111,6 +108,9 @@ function autoEnqueue(burstMode = false) {
   // Only enqueue 'low' projects if no high/medium are eligible
   const hasHigherPriority = sorted.some(p => p.priority === 'high' || p.priority === 'medium');
 
+  // Read log once outside the loop (was inside triple-nested loop before)
+  const recentLog = store.readLog(100);
+
   for (const { name, proj, priority } of sorted) {
     if (enqueued >= maxEnqueue) break;
     if (priority === 'low' && hasHigherPriority) continue;
@@ -118,15 +118,13 @@ function autoEnqueue(burstMode = false) {
     for (const rule of SCORE_SKILLS) {
       if ((proj.score || 5) <= rule.maxScore) {
         for (const skill of rule.skills) {
-          const recentLog = store.readLog(100);
           const recentlyRan = recentLog.some(
             l => l.project === name && l.skill === skill &&
                  l.timestamp && (Date.now() - new Date(l.timestamp).getTime()) < 7 * 24 * 60 * 60 * 1000
           );
           if (recentlyRan) continue;
 
-          const skillDef = executor.SKILLS[skill];
-          if (skillDef && store.budgetRemaining() > skillDef.budgetUsd) {
+          if (executor.SKILLS[skill]) {
             store.enqueue({
               project: name,
               skill,
@@ -239,10 +237,6 @@ async function tick() {
     return;
   }
 
-  if (!hasBudget()) {
-    notifyStatus('waiting', 'Sin presupuesto restante hoy');
-    return;
-  }
 
   // Burst mode: allow multiple tasks per tick
   const isBurst = pacingAction === 'burst';
@@ -252,7 +246,6 @@ async function tick() {
   while (tasksThisTick < maxTasksPerTick) {
     // Re-check for busy sessions before each additional task
     if (tasksThisTick > 0 && await hasUserBusySessions()) break;
-    if (!hasBudget()) break;
 
     // Get next task (cost-aware selection)
     let task = selectTask(pacingAction);
@@ -347,9 +340,11 @@ function start(opts = {}) {
   paused = false;
 
   if (timer) return; // already running
-  // Run first tick after a short delay (let app initialize)
-  setTimeout(tick, 5000);
-  scheduleTick();
+  // First tick after 5s delay (let app initialize), then dynamic scheduling
+  timer = setTimeout(async () => {
+    await tick();
+    if (!paused && timer !== null) scheduleTick();
+  }, 5000);
 }
 
 function stop() {
