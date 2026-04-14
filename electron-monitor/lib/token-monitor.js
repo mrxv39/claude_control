@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PROJECTS_DIR = path.join(process.env.USERPROFILE, '.claude', 'projects');
+const RATE_LIMITS_PATH = path.join(process.env.USERPROFILE, '.claude', 'claudio-state', 'rate-limits.json');
 
 /**
  * Get the timestamp of the most recent user message across all sessions.
@@ -124,4 +125,33 @@ function isUserIdle(minutes = 15) {
   return true;
 }
 
-module.exports = { getLastUserActivity, getIdleMinutes, isUserIdle };
+/**
+ * Read rate limits from the shared file written by statusline-writer.js.
+ * Returns { fiveHour: { usedPercent, resetsAt }, sevenDay: { usedPercent, resetsAt }, updatedAt }
+ * or null if no data available.
+ */
+function getRateLimits() {
+  try {
+    if (!fs.existsSync(RATE_LIMITS_PATH)) return null;
+    const raw = fs.readFileSync(RATE_LIMITS_PATH, 'utf-8');
+    const data = JSON.parse(raw);
+    // Consider stale if older than 10 minutes
+    if (data.updatedAt && (Date.now() - data.updatedAt) > 10 * 60 * 1000) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if there's spare capacity in the 5-hour window.
+ * @param {number} threshold — max % used to consider "spare" (default 50)
+ * @returns {boolean} true if usage < threshold
+ */
+function hasSpareCapacity(threshold = 50) {
+  const rl = getRateLimits();
+  if (!rl) return false; // no data → be conservative
+  return rl.fiveHour.usedPercent < threshold;
+}
+
+module.exports = { getLastUserActivity, getIdleMinutes, isUserIdle, getRateLimits, hasSpareCapacity };

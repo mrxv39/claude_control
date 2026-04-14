@@ -27,6 +27,8 @@ const DEFAULTS = {
   priorityOverrides: {},  // { projectName: 'high'|'medium'|'ignored' }
   idleEnabled: true,
   idleMinutes: 15,
+  capacityEnabled: true,
+  capacityThreshold: 50,  // execute if 5h usage < this %
   projects: {},
   queue: []
 };

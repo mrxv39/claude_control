@@ -146,7 +146,7 @@ function autoEnqueue() {
   return enqueued;
 }
 
-let currentMode = null; // 'off-hours' | 'idle' | null
+let currentMode = null; // 'off-hours' | 'idle' | 'capacity' | null
 
 async function tick() {
   if (running || paused) return;
@@ -155,23 +155,29 @@ async function tick() {
   const outsideHours = isOutsideWorkHours();
   const idle = config.idleEnabled && tokenMonitor.isUserIdle(config.idleMinutes || 15);
   const busy = await hasUserBusySessions();
+  const spareCapacity = config.capacityEnabled && tokenMonitor.hasSpareCapacity(config.capacityThreshold || 50);
+  const rateLimits = tokenMonitor.getRateLimits();
+  const usedPct = rateLimits ? rateLimits.fiveHour.usedPercent : null;
 
-  // Determine execution mode
+  // Determine execution mode (priority: off-hours > idle > capacity)
   if (outsideHours && !busy) {
     currentMode = 'off-hours';
   } else if (!outsideHours && idle && !busy) {
     currentMode = 'idle';
+  } else if (!outsideHours && !busy && spareCapacity) {
+    currentMode = 'capacity';
   } else {
     currentMode = null;
-    // If user is active and we were in idle mode, emergency stop
     if (!idle && running) {
       executor.emergencyStop();
       running = false;
       notifyStatus('stopped', 'Usuario activo — ejecución detenida');
       return;
     }
+    const pctStr = usedPct !== null ? ` | 5h: ${usedPct}%` : '';
     const reason = busy ? 'Sesiones activas — esperando' :
-                   !outsideHours && !idle ? `Idle: ${Math.round(tokenMonitor.getIdleMinutes())}/${config.idleMinutes || 15} min` :
+                   usedPct !== null && usedPct >= (config.capacityThreshold || 50) ? `Capacity ${usedPct}% >= ${config.capacityThreshold || 50}%` :
+                   !outsideHours && !idle ? `Idle: ${Math.round(tokenMonitor.getIdleMinutes())}/${config.idleMinutes || 15} min${pctStr}` :
                    'Esperando';
     notifyStatus('waiting', reason);
     return;
@@ -284,6 +290,9 @@ function getStatus() {
     running,
     paused,
     currentMode,
+    rateLimits: tokenMonitor.getRateLimits(),
+    capacityEnabled: config.capacityEnabled !== false,
+    capacityThreshold: config.capacityThreshold || 50,
     outsideWorkHours: isOutsideWorkHours(),
     idleEnabled: config.idleEnabled !== false,
     idleMinutes: config.idleMinutes || 15,

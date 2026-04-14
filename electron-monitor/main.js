@@ -617,6 +617,19 @@ async function checkForUpdates() {
   } catch {}
 }
 
+// ---- Auto-setup statusLine for rate limit tracking ----
+function setupStatusLine() {
+  try {
+    const settingsPath = path.join(process.env.USERPROFILE, '.claude', 'settings.json');
+    if (!fs.existsSync(settingsPath)) return;
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    if (settings.statusLine && settings.statusLine.includes('statusline-writer')) return; // already set
+    const scriptPath = resolveScript('lib/statusline-writer.js').replace(/\\/g, '\\\\');
+    settings.statusLine = `node "${scriptPath}"`;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+  } catch {}
+}
+
 // ---- Auto-setup hook check ----
 function checkHookSetup() {
   try {
@@ -769,6 +782,7 @@ app.whenReady().then(() => {
   // Check hook setup and updates after window loads
   mainWindow.webContents.on('did-finish-load', () => {
     checkHookSetup();
+    setupStatusLine();
     checkForUpdates();
     setInterval(checkForUpdates, 6 * 60 * 60 * 1000); // every 6h
     // Auto-scan projects if last scan > 24h ago

@@ -235,14 +235,23 @@ async function refresh() {
     }).catch(() => {});
   }
   render(sessions);
-  // Update idle indicator
+  // Update status indicator (idle / capacity / auto)
   try {
     const sched = await ipcRenderer.invoke('get-scheduler-status');
     const ind = document.getElementById('idle-indicator');
     if (sched.running) {
-      const label = sched.currentMode === 'idle' ? 'AUTO-IDLE' : 'AUTO';
-      ind.textContent = label;
+      const modeLabels = { 'off-hours': 'AUTO', 'idle': 'AUTO-IDLE', 'capacity': 'AUTO-CAP' };
+      ind.textContent = modeLabels[sched.currentMode] || 'AUTO';
       ind.style.display = '';
+      ind.style.color = '#bb9af7';
+      ind.style.background = 'rgba(187,154,247,.15)';
+    } else if (sched.rateLimits) {
+      const pct = sched.rateLimits.fiveHour.usedPercent;
+      const color = pct < 50 ? '#9ece6a' : pct < 80 ? '#e0af68' : '#f7768e';
+      ind.textContent = `5h:${pct}%`;
+      ind.style.display = '';
+      ind.style.color = color;
+      ind.style.background = color + '22';
     } else if (sched.userIsIdle && sched.idleEnabled && !sched.paused) {
       ind.textContent = `idle ${sched.userIdleFor}m`;
       ind.style.display = '';
@@ -478,6 +487,19 @@ async function renderQueue() {
   html += `<span style="font-size:10px;color:#bb9af7;margin-left:auto;">Idle actual: ${status.userIdleFor} min</span>`;
   html += `</div>`;
 
+  // Capacity mode config
+  const capChecked = status.capacityEnabled ? 'checked' : '';
+  const rl = status.rateLimits;
+  const rlStr = rl ? `5h: ${rl.fiveHour.usedPercent}%` : 'sin datos (statusLine pendiente)';
+  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">`;
+  html += `<label style="font-size:10px;color:#565f89;">Modo capacity:</label>`;
+  html += `<input type="checkbox" id="capacity-enabled" ${capChecked} style="-webkit-app-region:no-drag;">`;
+  html += `<label style="font-size:10px;color:#565f89;">Ejecutar si uso <</label>`;
+  html += `<input type="number" id="capacity-threshold" value="${status.capacityThreshold}" min="10" max="90" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
+  html += `<span style="font-size:10px;color:#565f89;">%</span>`;
+  html += `<span style="font-size:10px;color:#9ece6a;margin-left:auto;">${rlStr}</span>`;
+  html += `</div>`;
+
   if (!queue.length) {
     html += `<div class="empty-msg">No hay tareas en cola.<br><span style="font-size:11px;color:#565f89;">Se encolarán automáticamente fuera de horario según la salud de los proyectos.</span></div>`;
   } else {
@@ -519,7 +541,9 @@ async function renderQueue() {
     const blacklist = blacklistStr.split(',').map(s => s.trim()).filter(Boolean);
     const idleEnabled = document.getElementById('idle-enabled').checked;
     const idleMinutes = parseInt(document.getElementById('idle-minutes').value) || 15;
-    await ipcRenderer.invoke('set-orchestrator-config', { workHours: { start, end }, dailyBudgetUsd: budget, blacklist, idleEnabled, idleMinutes });
+    const capacityEnabled = document.getElementById('capacity-enabled').checked;
+    const capacityThreshold = parseInt(document.getElementById('capacity-threshold').value) || 50;
+    await ipcRenderer.invoke('set-orchestrator-config', { workHours: { start, end }, dailyBudgetUsd: budget, blacklist, idleEnabled, idleMinutes, capacityEnabled, capacityThreshold });
     renderQueue();
   });
   if (addTaskBtn) addTaskBtn.addEventListener('click', () => showAddTaskDialog());
