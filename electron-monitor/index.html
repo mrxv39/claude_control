@@ -91,6 +91,7 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
       <button class="panel-tab" data-tab="log">Log</button>
     </div>
     <span class="panel-budget" id="budget-display"></span>
+    <button class="close" id="panel-close-btn" style="margin-left:8px;" title="Cerrar panel">✕</button>
   </div>
   <div class="panel-content" id="panel-content"></div>
 </div>
@@ -257,12 +258,14 @@ const panelContent = document.getElementById('panel-content');
 const budgetDisplay = document.getElementById('budget-display');
 let currentTab = 'health';
 
-gearBtn.addEventListener('click', async () => {
+async function togglePanel() {
   const isOpen = await ipcRenderer.invoke('toggle-panel');
   panel.classList.toggle('open', isOpen);
   gearBtn.classList.toggle('active', isOpen);
   if (isOpen) loadTab(currentTab);
-});
+}
+gearBtn.addEventListener('click', togglePanel);
+document.getElementById('panel-close-btn').addEventListener('click', togglePanel);
 
 document.querySelectorAll('.panel-tab').forEach(btn => {
   btn.addEventListener('click', () => {
