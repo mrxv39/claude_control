@@ -398,6 +398,8 @@ function startOverlayLoop() {
 
 // ---- Status change notifications (custom toast window) ----
 const prevStatus = new Map(); // cwd -> status
+const waitingSince = new Map(); // cwd -> 'BUSY' if WAITING streak started from BUSY
+const waitingCount = new Map(); // cwd -> consecutive WAITING polls (debounce)
 
 function showToast(message) {
   const { screen } = require('electron');
@@ -432,8 +434,19 @@ function checkStatusChanges(sessions) {
     if (!s.isClaude || !s.cwd) continue;
     const prev = prevStatus.get(s.cwd);
     prevStatus.set(s.cwd, s.status);
-    if (prev === 'BUSY' && s.status === 'WAITING') {
-      showToast(`${s.project} termino — esperando tu input`);
+    if (s.status === 'WAITING') {
+      const count = (waitingCount.get(s.cwd) || 0) + 1;
+      waitingCount.set(s.cwd, count);
+      // Remember if this WAITING streak started from BUSY
+      if (count === 1) waitingSince.set(s.cwd, prev);
+      // Require 3 consecutive WAITING polls (~9s) before notifying,
+      // to avoid false alerts from brief pauses between tool calls.
+      if (waitingSince.get(s.cwd) === 'BUSY' && count === 3) {
+        showToast(`${s.project} termino — esperando tu input`);
+      }
+    } else {
+      waitingCount.set(s.cwd, 0);
+      waitingSince.delete(s.cwd);
     }
   }
 }

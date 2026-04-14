@@ -113,17 +113,59 @@ foreach ($s in $shells) {
                 }
             }
             if ($bestSt) {
-                $status = $bestSt.status
+                if ($bestSt.hwnd) { $hwnd = [int64]$bestSt.hwnd }
+                # Determine status from JSONL conversation state (no delays).
+                # Last stop_reason in the JSONL tells us exactly where Claude is:
+                #   "end_turn" = Claude finished its turn → WAITING
+                #   "tool_use" = Claude is mid-turn, called a tool → BUSY
+                # If the last line is a user/tool_result message → Claude is processing → BUSY
+                $jsonlStatus = $null
+                if ($bestSt.sessionId -and $cwd -ne 'N/A') {
+                    try {
+                        $folderName = $cwd -replace ':\\', '--' -replace '\\', '-' -replace '/', '-' -replace '_', '-'
+                        $jsonlPath = Join-Path $env:USERPROFILE ".claude\projects\$folderName\$($bestSt.sessionId).jsonl"
+                        if (Test-Path $jsonlPath) {
+                            $fs = [System.IO.FileStream]::new($jsonlPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                            $tailSize = [math]::Min(4096, $fs.Length)
+                            $fs.Seek(-$tailSize, [System.IO.SeekOrigin]::End) | Out-Null
+                            $rdr = New-Object System.IO.StreamReader($fs)
+                            $tail = $rdr.ReadToEnd()
+                            $rdr.Close(); $fs.Close()
+                            $lines = $tail -split "`n"
+                            # Walk backwards to find the last meaningful line
+                            for ($li = $lines.Count - 1; $li -ge 0; $li--) {
+                                $ln = $lines[$li].Trim()
+                                if ($ln.Length -lt 10) { continue }
+                                if ($ln -match '"stop_reason"\s*:\s*"end_turn"') {
+                                    $jsonlStatus = 'WAITING'
+                                    break
+                                } elseif ($ln -match '"stop_reason"\s*:\s*"tool_use"') {
+                                    $jsonlStatus = 'BUSY'
+                                    break
+                                } elseif ($ln -match '"type"\s*:\s*"user"') {
+                                    # User message (tool_result or human prompt) — Claude is processing
+                                    $jsonlStatus = 'BUSY'
+                                    break
+                                }
+                            }
+                        }
+                    } catch {}
+                }
+                if ($jsonlStatus) {
+                    $status = $jsonlStatus
+                } else {
+                    # Fallback to hook state if JSONL not readable
+                    $status = $bestSt.status
+                }
                 if ($status -eq 'BUSY') { $running = 'claude (working)' }
                 elseif ($status -eq 'WAITING') { $running = 'claude (idle)' }
-                if ($bestSt.hwnd) { $hwnd = [int64]$bestSt.hwnd }
                 # Read context usage from conversation JSONL
                 if ($bestSt.sessionId -and $cwd -ne 'N/A') {
                     try {
                         $folderName = $cwd -replace ':\\', '--' -replace '\\', '-' -replace '/', '-' -replace '_', '-'
                         $jsonlPath = Join-Path $env:USERPROFILE ".claude\projects\$folderName\$($bestSt.sessionId).jsonl"
                         if (Test-Path $jsonlPath) {
-                            $fs = [System.IO.File]::OpenRead($jsonlPath)
+                            $fs = [System.IO.FileStream]::new($jsonlPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
                             $tailSize = [math]::Min(32768, $fs.Length)
                             $fs.Seek(-$tailSize, [System.IO.SeekOrigin]::End) | Out-Null
                             $rdr = New-Object System.IO.StreamReader($fs)
