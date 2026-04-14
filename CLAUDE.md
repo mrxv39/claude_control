@@ -1,10 +1,18 @@
 # claudio_control
 
-Monitor visual de sesiones Claude Code corriendo en Windows Terminal. Barra siempre-encima en la parte superior de la pantalla con un chip por sesión, overlays flotantes con el nombre del proyecto pegados a cada ventana WT, focus por click, multi-select para tile. Notificaciones sonoras (ding-dong) cuando Claude termina. System tray. Auto-update. Single instance.
+Monitor visual + orquestador autónomo de sesiones Claude Code en Windows Terminal. Barra siempre-encima con chips de estado por sesión, overlays flotantes, focus por click, multi-select para tile, notificaciones sonoras. Panel desplegable con análisis de salud de proyectos, cola de tareas autónomas, y log de conversación. Ejecución programada de skills fuera de horario laboral.
 
 ## Componentes
 
 - **`electron-monitor/`** — app Electron principal (barra + overlays + tile + tray + notificaciones + auto-update)
+- **`electron-monitor/lib/`** — módulos del orquestador:
+  - `orchestrator-store.js` — persistencia en `~/.claude/claudio-state/orchestrator.json`
+  - `project-scanner.js` — descubrimiento de proyectos en directorios configurados
+  - `project-analyzer.js` — health checks locales (CLAUDE.md, tests, git, deps)
+  - `executor.js` — ejecuta `claude --print` en ramas auto-creadas
+  - `scheduler.js` — planificador autónomo fuera de horario laboral
+  - `git-status.js` — rama y dirty count por proyecto
+  - `conversation-reader.js` — lee JSONL de sesiones para log display
 - **`SessionMonitor/`**, **`ClaudeSession/`** — módulos PowerShell antiguos (versión previa)
 - **`instrucciones.html`** — manual de usuario HTML standalone
 
@@ -27,6 +35,18 @@ Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 - **state files**: `~/.claude/claudio-state/<sha1-16char>.json`. Se pueden borrar para forzar re-captura del HWND.
 - **chime.wav**: se genera automáticamente en `~/.claude/claudio-state/chime.wav`. Borrar para regenerar.
 - **Hook config**: en `~/.claude/settings.json`, eventos `UserPromptSubmit` (BUSY) y `Stop`/`SessionStart` (WAITING). Se configura automáticamente con `setup-hook.ps1` o desde el chip amarillo.
+- **orchestrator.json**: `~/.claude/claudio-state/orchestrator.json` — config del orquestador (projectDirs, workHours, budget, proyectos, cola).
+- **orchestrator-log.jsonl**: historial de ejecuciones autónomas (append-only).
+- **runs/**: `~/.claude/claudio-state/runs/<id>.log` — output de cada ejecución.
+
+## Orquestador autónomo
+
+- **Panel**: botón ⚙ en la barra abre panel de 400px con tabs Salud/Cola/Log.
+- **Salud**: escanea `Desktop/proyectos` (41 proyectos), score 1-10, checks locales gratis.
+- **Cola**: scheduler ejecuta skills fuera de horario laboral, siempre en rama `claudio/auto/*`.
+- **Skills**: audit-claude-md, security-review, dep-update, simplify, add-tests, git-cleanup.
+- **Seguridad**: budget diario ($2 default), per-task cap, nunca toca master, nunca push.
+- **Git badges**: rama + dirty count en cada chip de sesión.
 
 ## Pendientes / cosas frágiles
 
