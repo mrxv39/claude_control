@@ -42,11 +42,15 @@ Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 ## Orquestador autónomo
 
 - **Panel**: botón ⚙ en la barra abre panel de 400px con tabs Salud/Cola/Log.
-- **Salud**: escanea `Desktop/proyectos` (41 proyectos), score 1-10, checks locales gratis.
-- **Cola**: scheduler ejecuta skills fuera de horario laboral, siempre en rama `claudio/auto/*`.
+- **Salud**: escanea `Desktop/proyectos`, score 1-10, checks locales gratis.
+- **Cola**: scheduler ejecuta skills, siempre en rama `claudio/auto/*`.
 - **Skills**: audit-claude-md, security-review, dep-update, simplify, add-tests, git-cleanup.
-- **Seguridad**: budget diario ($2 default), per-task cap, nunca toca master, nunca push.
-- **Git badges**: rama + dirty count en cada chip de sesión.
+- **Modelos**: opus (security-review, simplify, add-tests), sonnet (audit, dep-update, git-cleanup).
+- **Pacing**: curva `progress^0.6 × 95%` para maximizar tokens del ciclo de 5h. Modos: burst (15s), accelerate (30s), pace (60s), coast (120s).
+- **Prioridades**: high (≤7d), medium (8-30d), low (31-90d, solo si no hay high/medium), ignored (>90d).
+- **Seguridad**: nunca toca master, nunca push. Sin budget artificial (Max plan).
+- **statusLine hook**: `~/.claude/settings.json` → escribe `rate-limits.json` con rate limits, contexto, coste.
+- **Git badges**: rama + dirty count + contexto % en cada chip de sesión.
 
 ## Pendientes / cosas frágiles
 

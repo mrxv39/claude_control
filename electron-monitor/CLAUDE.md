@@ -105,9 +105,25 @@ Arranca centrada horizontalmente. Si el usuario la arrastra, recuerda la posici�
 - `resolveScript(name)` busca scripts en `__dirname` (dev) o `process.resourcesPath` (empaquetado).
 - Release en GitHub: `gh release create vX.X.X dist/ClaudioControl.exe`.
 
+## Smart Pacing (scheduler.js + token-monitor.js)
+
+El scheduler maximiza el uso de tokens en cada ciclo de 5 horas del rate limit.
+
+- **Curva de pacing**: `targetUsage = progress^0.6 × maxTarget(95%)`. Compara uso real vs objetivo.
+- **Acciones**: burst (delta>15, tick 15s, 3 tareas/tick), accelerate (delta>5, 30s), pace (delta>-5, 60s), coast (delta≤-5, 120s).
+- **7-day guard**: coast forzado si 7d>80%, reduce maxTarget a 70% si 7d>60%.
+- **Tick dinámico**: `setTimeout` encadenado (no `setInterval`) permite cambiar intervalo entre ticks.
+- **Selección de tareas**: burst/accelerate → tareas caras (opus) primero. pace/coast → baratas primero.
+- **Burst loop**: hasta 3 tareas por tick si cada una termina en <90s.
+- **Stuck watchdog**: si una tarea lleva >6 min, `emergencyStop()` + reset de `running`.
+- **Config**: `pacingEnabled`, `pacingMaxTarget`, `pacingExponent`, `sevenDayThrottle`, `sevenDayCaution` en orchestrator.json.
+- **Kill switch**: `pacingEnabled: false` vuelve al threshold estático anterior.
+- **statusLine hook**: formato objeto `{type:"command", command:"...", refreshInterval:10000}` en settings.json. Escribe `rate-limits.json` cada ~10s con fiveHour, sevenDay, contextWindow, cost.
+- **Indicador**: barra muestra `5h:XX%→YY% ACTION MODE` (ej: `5h:14%→40% BURST CAP`).
+
 ## Degradación de contexto
 
-Cada chip Claude muestra una barra de progreso (3px) indicando el % de contexto usado (de 1M tokens).
+Cada chip Claude muestra un badge con el % de contexto usado (de 1M tokens) y una barra de progreso (3px).
 
 - **Fuente**: `get-sessions.ps1` lee los últimos 32KB del JSONL de conversación (`~/.claude/projects/<cwd-dashes>/<sessionId>.jsonl`), extrae `cache_read_input_tokens + cache_creation_input_tokens + input_tokens` del último mensaje assistant.
 - **Cálculo**: `total_tokens / 10000` = % de 1M.
