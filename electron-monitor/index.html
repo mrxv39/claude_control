@@ -38,14 +38,14 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
 .gear { background:rgba(255,255,255,.08); border:none; color:#565f89; font-size:13px; cursor:pointer; padding:3px 7px; border-radius:4px; -webkit-app-region:no-drag; }
 .gear:hover { background:rgba(122,162,247,.3); color:#7aa2f7; }
 .gear.active { background:rgba(122,162,247,.25); color:#7aa2f7; }
-.panel { display:none; background:#181825; border-top:1px solid #2a2b3d; padding:10px 14px; height:392px; overflow:hidden; -webkit-app-region:no-drag; }
+.panel { display:none; background:#181825; border-top:1px solid #2a2b3d; padding:10px 14px; overflow:hidden; -webkit-app-region:no-drag; height:calc(100vh - 48px); }
 .panel.open { display:block; }
 .panel-tabs { display:flex; gap:6px; margin-bottom:10px; }
 .panel-tab { font-size:12px; color:#565f89; background:rgba(255,255,255,.05); border:1px solid transparent; padding:4px 12px; border-radius:5px; cursor:pointer; }
 .panel-tab:hover { color:#c0caf5; }
 .panel-tab.active { color:#7aa2f7; border-color:rgba(122,162,247,.3); background:rgba(122,162,247,.1); }
 .panel-budget { font-size:11px; color:#565f89; margin-left:auto; }
-.panel-content { overflow-y:auto; height:340px; scrollbar-width:thin; scrollbar-color:#2a2b3d #181825; }
+.panel-content { overflow-y:auto; height:calc(100vh - 100px); scrollbar-width:thin; scrollbar-color:#2a2b3d #181825; }
 .project-card { background:#1e1e2e; border:1px solid #2a2b3d; border-radius:8px; padding:10px 14px; margin-bottom:8px; }
 .project-card-header { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
 .project-card-name { font-size:13px; font-weight:600; color:#c0caf5; }
