@@ -39,6 +39,14 @@ const SKILLS = {
   'git-cleanup': {
     model: 'sonnet',
     prompt: `Limpia este repositorio git: elimina ramas locales ya mergeadas (excepto master/main), verifica que .gitignore cubre node_modules, dist, build, .env, *.log, y otros patrones comunes para el stack del proyecto. Solo modifica .gitignore si le faltan entradas importantes.`
+  },
+  'ui-polish': {
+    model: 'sonnet',
+    prompt: `Revisa los archivos de UI de este proyecto (HTML, CSS, JSX, TSX, Vue, Svelte, templates). Mejora en un solo pase:
+1. **Visual**: colores sueltos → CSS variables, spacing inconsistente → tokens uniformes, estados hover/focus/active faltantes en elementos interactivos, tipografía sin jerarquía clara.
+2. **Accesibilidad**: elementos interactivos sin keyboard access, divs/spans que deberían ser button/nav/main, aria-labels faltantes en botones de solo icono, contraste de color insuficiente.
+3. **Animaciones**: propiedades caras (width/height/top/left) → transform/opacity, transiciones faltantes en cambios de estado, añadir prefers-reduced-motion donde haya animaciones.
+Solo aplica cambios que mejoren sin cambiar funcionalidad. No toques lógica de negocio ni backend. Prioriza: estados interactivos > accesibilidad > consistencia visual > animaciones.`
   }
 };
 

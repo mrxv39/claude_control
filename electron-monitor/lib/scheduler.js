@@ -14,6 +14,7 @@
 const store = require('./orchestrator-store');
 const executor = require('./executor');
 const tokenMonitor = require('./token-monitor');
+const tokenHistory = require('./token-history');
 
 let timer = null;
 let running = false;
@@ -29,7 +30,7 @@ const STUCK_TIMEOUT = 6 * 60 * 1000; // 6 min — if task runs longer, force res
 const SCORE_SKILLS = [
   { maxScore: 3, skills: ['security-review', 'audit-claude-md'] },
   { maxScore: 5, skills: ['audit-claude-md', 'dep-update'] },
-  { maxScore: 7, skills: ['add-tests'] },
+  { maxScore: 7, skills: ['add-tests', 'ui-polish'] },
   { maxScore: 10, skills: ['git-cleanup'] },
 ];
 
@@ -195,6 +196,11 @@ async function tick() {
     : null;
   lastPacingDecision = pacing;
 
+  // Capture end-of-cycle token usage snapshot
+  if (pacing && pacing.cycle) {
+    tokenHistory.maybeCaptureCycleEnd(pacing.cycle, tokenMonitor.getRateLimits());
+  }
+
   // Fallback for when pacing is disabled: use old threshold
   const oldCapacity = !pacing && config.capacityEnabled &&
     tokenMonitor.hasSpareCapacity(config.capacityThreshold || 50);
@@ -338,6 +344,8 @@ function start(opts = {}) {
   getSessionsFn = opts.getSessions || null;
   onStatusChange = opts.onStatus || null;
   paused = false;
+
+  tokenHistory.initLastSaved();
 
   if (timer) return; // already running
   // First tick after 5s delay (let app initialize), then dynamic scheduling

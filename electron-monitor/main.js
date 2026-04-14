@@ -7,6 +7,7 @@ const scanner = require('./lib/project-scanner');
 const analyzer = require('./lib/project-analyzer');
 const scheduler = require('./lib/scheduler');
 const executor = require('./lib/executor');
+const tokenHistory = require('./lib/token-history');
 const gitStatus = require('./lib/git-status');
 const conversationReader = require('./lib/conversation-reader');
 const koffi = require('koffi');
@@ -721,6 +722,9 @@ ipcMain.handle('get-scheduler-status', () => scheduler.getStatus());
 ipcMain.handle('pause-scheduler', () => { scheduler.pause(); return true; });
 ipcMain.handle('resume-scheduler', () => { scheduler.resume(); return true; });
 ipcMain.handle('emergency-stop', () => { scheduler.pause(); return true; });
+
+ipcMain.handle('get-token-history', () => tokenHistory.readHistory(50));
+ipcMain.handle('get-token-history-stats', () => tokenHistory.getStats());
 
 ipcMain.handle('add-to-queue', (ev, task) => store.enqueue(task));
 ipcMain.handle('remove-from-queue', (ev, taskId) => { store.dequeue(taskId); return true; });

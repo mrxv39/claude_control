@@ -13,6 +13,7 @@ Monitor visual + orquestador autónomo de sesiones Claude Code en Windows Termin
   - `scheduler.js` — planificador autónomo fuera de horario laboral
   - `git-status.js` — rama y dirty count por proyecto
   - `conversation-reader.js` — lee JSONL de sesiones para log display
+  - `token-history.js` — captura uso de tokens al final de cada ciclo 5h en JSONL
 - **`SessionMonitor/`**, **`ClaudeSession/`** — módulos PowerShell antiguos (versión previa)
 - **`instrucciones.html`** — manual de usuario HTML standalone
 
@@ -38,14 +39,15 @@ Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 - **orchestrator.json**: `~/.claude/claudio-state/orchestrator.json` — config del orquestador (projectDirs, workHours, budget, proyectos, cola).
 - **orchestrator-log.jsonl**: historial de ejecuciones autónomas (append-only).
 - **runs/**: `~/.claude/claudio-state/runs/<id>.log` — output de cada ejecución.
+- **token-history.jsonl**: `~/.claude/claudio-state/token-history.jsonl` — historial de uso por ciclo 5h (append-only).
 
 ## Orquestador autónomo
 
 - **Panel**: botón ⚙ en la barra abre panel de 400px con tabs Salud/Cola/Log.
 - **Salud**: escanea `Desktop/proyectos`, score 1-10, checks locales gratis.
 - **Cola**: scheduler ejecuta skills, siempre en rama `claudio/auto/*`.
-- **Skills**: audit-claude-md, security-review, dep-update, simplify, add-tests, git-cleanup.
-- **Modelos**: opus (security-review, simplify, add-tests), sonnet (audit, dep-update, git-cleanup).
+- **Skills**: audit-claude-md, security-review, dep-update, simplify, add-tests, git-cleanup, ui-polish.
+- **Modelos**: opus (security-review, simplify, add-tests), sonnet (audit, dep-update, git-cleanup, ui-polish).
 - **Pacing**: curva `progress^0.6 × 95%` para maximizar tokens del ciclo de 5h. Modos: burst (15s), accelerate (30s), pace (60s), coast (120s).
 - **Prioridades**: high (≤7d), medium (8-30d), low (31-90d, solo si no hay high/medium), ignored (>90d).
 - **Seguridad**: nunca toca master, nunca push. Sin budget artificial (Max plan).
