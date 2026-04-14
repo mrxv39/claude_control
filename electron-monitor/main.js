@@ -704,6 +704,15 @@ ipcMain.handle('get-skills', () => {
   }));
 });
 
+ipcMain.handle('get-project-priorities', () => {
+  const config = store.load();
+  const result = {};
+  for (const [name, proj] of Object.entries(config.projects)) {
+    result[name] = scheduler.getProjectPriority(name, proj, config);
+  }
+  return result;
+});
+
 // Dashboard IPC
 ipcMain.handle('get-git-status', async (ev, cwd) => {
   try { return await gitStatus.getStatus(cwd); }

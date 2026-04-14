@@ -58,8 +58,26 @@ async function hasUserBusySessions() {
 }
 
 /**
- * Auto-enqueue tasks based on project analysis scores.
- * Only enqueues for projects that don't already have pending tasks.
+ * Get priority level for a project based on last commit age.
+ * Returns 'high' (≤7d), 'medium' (8-30d), or 'ignored' (>30d / blacklisted).
+ */
+function getProjectPriority(name, proj, config) {
+  const blacklist = config.blacklist || [];
+  if (blacklist.includes(name)) return 'ignored';
+
+  const days = proj.checks && proj.checks.lastCommitDays;
+  if (days === null || days === undefined) return 'ignored';
+
+  const rules = config.priorityRules || { high: 7, medium: 30 };
+  if (days <= rules.high) return 'high';
+  if (days <= rules.medium) return 'medium';
+  return 'ignored';
+}
+
+/**
+ * Auto-enqueue tasks based on project priority and health scores.
+ * Only enqueues for active projects (not blacklisted, not stale).
+ * Priority: high (recent commits) before medium. Within each, worst score first.
  */
 function autoEnqueue() {
   const config = store.load();
@@ -74,12 +92,21 @@ function autoEnqueue() {
   let enqueued = 0;
   const maxEnqueue = 5; // don't flood the queue
 
-  // Sort projects by score ascending (worst first)
-  const sorted = Object.entries(projects)
+  // Filter and classify projects by priority
+  const eligible = Object.entries(projects)
     .filter(([name]) => !busyProjects.has(name))
-    .sort((a, b) => (a[1].score || 5) - (b[1].score || 5));
+    .map(([name, proj]) => ({ name, proj, priority: getProjectPriority(name, proj, config) }))
+    .filter(p => p.priority !== 'ignored');
 
-  for (const [name, proj] of sorted) {
+  // Sort: high priority first, then by score ascending (worst first)
+  const priorityOrder = { high: 0, medium: 1 };
+  const sorted = eligible.sort((a, b) => {
+    const pDiff = (priorityOrder[a.priority] || 2) - (priorityOrder[b.priority] || 2);
+    if (pDiff !== 0) return pDiff;
+    return (a.proj.score || 5) - (b.proj.score || 5);
+  });
+
+  for (const { name, proj } of sorted) {
     if (enqueued >= maxEnqueue) break;
 
     // Find applicable skills for this score
@@ -236,4 +263,4 @@ function getStatus() {
   };
 }
 
-module.exports = { start, stop, pause, resume, getStatus, autoEnqueue };
+module.exports = { start, stop, pause, resume, getStatus, autoEnqueue, getProjectPriority };

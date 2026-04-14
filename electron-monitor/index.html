@@ -277,8 +277,11 @@ async function loadTab(tab) {
   else if (tab === 'log') await renderLog();
 }
 
+let healthFilter = 'all'; // 'all', 'high', 'medium', 'ignored'
+
 async function renderHealth() {
   const projects = await ipcRenderer.invoke('get-project-analysis');
+  const priorities = await ipcRenderer.invoke('get-project-priorities');
   const entries = Object.entries(projects);
 
   if (!entries.length) {
@@ -291,22 +294,48 @@ async function renderHealth() {
     return;
   }
 
-  // Sort by score (ascending — worst first)
-  entries.sort((a, b) => (a[1].score || 5) - (b[1].score || 5));
+  // Count per priority
+  const counts = { high: 0, medium: 0, ignored: 0 };
+  entries.forEach(([name]) => { const p = priorities[name] || 'ignored'; counts[p]++; });
 
-  let html = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">';
+  // Filter
+  const filtered = healthFilter === 'all' ? entries :
+    entries.filter(([name]) => (priorities[name] || 'ignored') === healthFilter);
+
+  // Sort: high priority first, then by score ascending
+  const priorityOrder = { high: 0, medium: 1, ignored: 2 };
+  filtered.sort((a, b) => {
+    const pA = priorityOrder[priorities[a[0]] || 'ignored'] || 2;
+    const pB = priorityOrder[priorities[b[0]] || 'ignored'] || 2;
+    if (pA !== pB) return pA - pB;
+    return (a[1].score || 5) - (b[1].score || 5);
+  });
+
+  let html = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap;">';
   html += `<button class="scan-btn" id="scan-btn">Re-escanear</button>`;
-  html += `<span style="font-size:11px;color:#565f89;">${entries.length} proyectos</span>`;
+  const fBtn = (id, label, count) => {
+    const active = healthFilter === id ? 'color:#7aa2f7;border-color:rgba(122,162,247,.4);background:rgba(122,162,247,.15);' : '';
+    return `<button class="scan-btn health-filter" data-filter="${id}" style="font-size:10px;padding:2px 8px;${active}">${label} (${count})</button>`;
+  };
+  html += fBtn('all', 'Todos', entries.length);
+  html += fBtn('high', 'Alta', counts.high);
+  html += fBtn('medium', 'Media', counts.medium);
+  html += fBtn('ignored', 'Ignorados', counts.ignored);
   html += '</div>';
 
-  for (const [name, proj] of entries) {
+  for (const [name, proj] of filtered) {
     const s = proj.score || 5;
     const scoreClass = s >= 7 ? 'score-high' : s >= 4 ? 'score-mid' : 'score-low';
     const checks = proj.checks || {};
+    const prio = priorities[name] || 'ignored';
+    const prioBadge = prio === 'high' ? '<span style="font-size:10px;color:#9ece6a;background:rgba(158,206,106,.15);padding:1px 6px;border-radius:3px;">ALTA</span>' :
+                      prio === 'medium' ? '<span style="font-size:10px;color:#e0af68;background:rgba(224,175,104,.15);padding:1px 6px;border-radius:3px;">MEDIA</span>' :
+                      '<span style="font-size:10px;color:#565f89;background:rgba(255,255,255,.05);padding:1px 6px;border-radius:3px;">IGNORADO</span>';
 
-    html += `<div class="project-card">`;
+    html += `<div class="project-card" style="${prio === 'ignored' ? 'opacity:.5;' : ''}">`;
     html += `<div class="project-card-header">`;
     html += `<span class="project-card-name">${esc(name)}</span>`;
+    html += prioBadge;
     html += `<span class="project-card-stack">${esc(proj.stack || '?')}</span>`;
     html += `<span class="score-badge ${scoreClass}">${s}/10</span>`;
     html += `</div>`;
@@ -334,6 +363,9 @@ async function renderHealth() {
 
   panelContent.innerHTML = html;
   document.getElementById('scan-btn').addEventListener('click', startScan);
+  panelContent.querySelectorAll('.health-filter').forEach(btn => {
+    btn.addEventListener('click', () => { healthFilter = btn.dataset.filter; renderHealth(); });
+  });
 }
 
 function checkBadge(label, value) {
@@ -356,6 +388,7 @@ async function startScan() {
 async function renderQueue() {
   const queue = await ipcRenderer.invoke('get-queue');
   const status = await ipcRenderer.invoke('get-scheduler-status');
+  const config = await ipcRenderer.invoke('get-orchestrator-config');
 
   let html = '';
 
@@ -385,6 +418,13 @@ async function renderQueue() {
   html += `<label style="font-size:10px;color:#565f89;margin-left:8px;">Budget/día: $</label>`;
   html += `<input type="number" id="budget-input" value="${status.dailyBudget}" min="0" step="0.5" style="width:50px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
   html += `<button class="scan-btn" id="save-config-btn" style="font-size:10px;padding:2px 8px;">Guardar</button>`;
+  html += `</div>`;
+
+  // Blacklist row
+  const bl = (config.blacklist || []).join(', ');
+  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">`;
+  html += `<label style="font-size:10px;color:#565f89;">Blacklist:</label>`;
+  html += `<input type="text" id="blacklist-input" value="${esc(bl)}" placeholder="proyecto1, proyecto2" style="flex:1;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 8px;font-size:11px;">`;
   html += `</div>`;
 
   if (!queue.length) {
@@ -424,7 +464,9 @@ async function renderQueue() {
     const start = parseInt(document.getElementById('wh-start').value) || 9;
     const end = parseInt(document.getElementById('wh-end').value) || 23;
     const budget = parseFloat(document.getElementById('budget-input').value) || 2;
-    await ipcRenderer.invoke('set-orchestrator-config', { workHours: { start, end }, dailyBudgetUsd: budget });
+    const blacklistStr = document.getElementById('blacklist-input').value || '';
+    const blacklist = blacklistStr.split(',').map(s => s.trim()).filter(Boolean);
+    await ipcRenderer.invoke('set-orchestrator-config', { workHours: { start, end }, dailyBudgetUsd: budget, blacklist });
     renderQueue();
   });
   if (addTaskBtn) addTaskBtn.addEventListener('click', () => showAddTaskDialog());

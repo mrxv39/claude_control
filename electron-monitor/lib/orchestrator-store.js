@@ -22,6 +22,8 @@ const DEFAULTS = {
   todaySpentUsd: 0.00,
   todayDate: new Date().toISOString().slice(0, 10),
   lastFullScan: null,
+  blacklist: ['substract'],
+  priorityRules: { high: 7, medium: 30 },
   projects: {},
   queue: []
 };
