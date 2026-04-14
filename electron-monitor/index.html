@@ -282,6 +282,7 @@ let healthFilter = 'all'; // 'all', 'high', 'medium', 'ignored'
 async function renderHealth() {
   const projects = await ipcRenderer.invoke('get-project-analysis');
   const priorities = await ipcRenderer.invoke('get-project-priorities');
+  const config = await ipcRenderer.invoke('get-orchestrator-config');
   const entries = Object.entries(projects);
 
   if (!entries.length) {
@@ -328,14 +329,18 @@ async function renderHealth() {
     const scoreClass = s >= 7 ? 'score-high' : s >= 4 ? 'score-mid' : 'score-low';
     const checks = proj.checks || {};
     const prio = priorities[name] || 'ignored';
-    const prioBadge = prio === 'high' ? '<span style="font-size:10px;color:#9ece6a;background:rgba(158,206,106,.15);padding:1px 6px;border-radius:3px;">ALTA</span>' :
-                      prio === 'medium' ? '<span style="font-size:10px;color:#e0af68;background:rgba(224,175,104,.15);padding:1px 6px;border-radius:3px;">MEDIA</span>' :
-                      '<span style="font-size:10px;color:#565f89;background:rgba(255,255,255,.05);padding:1px 6px;border-radius:3px;">IGNORADO</span>';
+    const prioColor = prio === 'high' ? '#9ece6a' : prio === 'medium' ? '#e0af68' : '#565f89';
+    const isOverride = (config.priorityOverrides || {})[name] ? true : false;
 
     html += `<div class="project-card" style="${prio === 'ignored' ? 'opacity:.5;' : ''}">`;
     html += `<div class="project-card-header">`;
     html += `<span class="project-card-name">${esc(name)}</span>`;
-    html += prioBadge;
+    html += `<select class="prio-select" data-project="${esc(name)}" style="font-size:10px;padding:1px 4px;border-radius:3px;border:1px solid ${prioColor}44;background:${prioColor}22;color:${prioColor};cursor:pointer;${isOverride ? 'font-weight:700;' : ''}">`;
+    html += `<option value="high"${prio === 'high' ? ' selected' : ''}>ALTA</option>`;
+    html += `<option value="medium"${prio === 'medium' ? ' selected' : ''}>MEDIA</option>`;
+    html += `<option value="ignored"${prio === 'ignored' ? ' selected' : ''}>IGNORADO</option>`;
+    if (isOverride) html += `<option value="auto">AUTO</option>`;
+    html += `</select>`;
     html += `<span class="project-card-stack">${esc(proj.stack || '?')}</span>`;
     html += `<span class="score-badge ${scoreClass}">${s}/10</span>`;
     html += `</div>`;
@@ -365,6 +370,12 @@ async function renderHealth() {
   document.getElementById('scan-btn').addEventListener('click', startScan);
   panelContent.querySelectorAll('.health-filter').forEach(btn => {
     btn.addEventListener('click', () => { healthFilter = btn.dataset.filter; renderHealth(); });
+  });
+  panelContent.querySelectorAll('.prio-select').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      await ipcRenderer.invoke('set-project-priority', { name: sel.dataset.project, priority: sel.value });
+      renderHealth();
+    });
   });
 }
 

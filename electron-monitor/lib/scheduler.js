@@ -59,11 +59,16 @@ async function hasUserBusySessions() {
 
 /**
  * Get priority level for a project based on last commit age.
+ * Manual overrides take precedence. Blacklist always wins.
  * Returns 'high' (≤7d), 'medium' (8-30d), or 'ignored' (>30d / blacklisted).
  */
 function getProjectPriority(name, proj, config) {
   const blacklist = config.blacklist || [];
   if (blacklist.includes(name)) return 'ignored';
+
+  // Manual override takes precedence
+  const overrides = config.priorityOverrides || {};
+  if (overrides[name]) return overrides[name];
 
   const days = proj.checks && proj.checks.lastCommitDays;
   if (days === null || days === undefined) return 'ignored';

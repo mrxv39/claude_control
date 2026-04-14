@@ -704,6 +704,18 @@ ipcMain.handle('get-skills', () => {
   }));
 });
 
+ipcMain.handle('set-project-priority', (ev, { name, priority }) => {
+  const config = store.load();
+  if (!config.priorityOverrides) config.priorityOverrides = {};
+  if (priority === 'auto') {
+    delete config.priorityOverrides[name];
+  } else {
+    config.priorityOverrides[name] = priority;
+  }
+  store.save(config);
+  return true;
+});
+
 ipcMain.handle('get-project-priorities', () => {
   const config = store.load();
   const result = {};

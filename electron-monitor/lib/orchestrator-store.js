@@ -24,6 +24,7 @@ const DEFAULTS = {
   lastFullScan: null,
   blacklist: ['substract'],
   priorityRules: { high: 7, medium: 30 },
+  priorityOverrides: {},  // { projectName: 'high'|'medium'|'ignored' }
   projects: {},
   queue: []
 };
