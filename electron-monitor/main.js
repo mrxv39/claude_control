@@ -7,6 +7,8 @@ const scanner = require('./lib/project-scanner');
 const analyzer = require('./lib/project-analyzer');
 const scheduler = require('./lib/scheduler');
 const executor = require('./lib/executor');
+const gitStatus = require('./lib/git-status');
+const conversationReader = require('./lib/conversation-reader');
 const koffi = require('koffi');
 
 // Win32
@@ -700,6 +702,16 @@ ipcMain.handle('get-skills', () => {
     model: def.model,
     budgetUsd: def.budgetUsd
   }));
+});
+
+// Dashboard IPC
+ipcMain.handle('get-git-status', async (ev, cwd) => {
+  try { return await gitStatus.getStatus(cwd); }
+  catch { return { branch: null, dirty: 0, recentCommits: [] }; }
+});
+ipcMain.handle('get-session-log', (ev, cwd) => {
+  try { return conversationReader.getConversationLog(cwd); }
+  catch { return []; }
 });
 
 app.setAppUserModelId('com.claudio.monitor');
