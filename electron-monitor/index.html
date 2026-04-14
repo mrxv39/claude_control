@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-html, body { width:max-content; }
+html, body { width:max-content; min-width:100%; }
 body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; user-select:none; -webkit-app-region:drag; }
 .bar { display:inline-flex; align-items:center; height:44px; padding:0 14px; gap:8px; width:max-content; }
 .logo { font-size:13px; font-weight:600; color:#7aa2f7; margin-right:8px; flex-shrink:0; }
@@ -33,6 +33,44 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
 .chip.setup { background:rgba(224,175,104,.2); border-color:rgba(224,175,104,.4); cursor:pointer; }
 .close { background:rgba(255,255,255,.08); border:none; color:#565f89; font-size:13px; cursor:pointer; padding:3px 7px; border-radius:4px; -webkit-app-region:no-drag; }
 .close:hover { background:rgba(247,118,142,.3); color:#f7768e; }
+.gear { background:rgba(255,255,255,.08); border:none; color:#565f89; font-size:13px; cursor:pointer; padding:3px 7px; border-radius:4px; -webkit-app-region:no-drag; }
+.gear:hover { background:rgba(122,162,247,.3); color:#7aa2f7; }
+.gear.active { background:rgba(122,162,247,.25); color:#7aa2f7; }
+.panel { display:none; background:#181825; border-top:1px solid #2a2b3d; padding:10px 14px; height:392px; overflow:hidden; -webkit-app-region:no-drag; }
+.panel.open { display:block; }
+.panel-tabs { display:flex; gap:6px; margin-bottom:10px; }
+.panel-tab { font-size:12px; color:#565f89; background:rgba(255,255,255,.05); border:1px solid transparent; padding:4px 12px; border-radius:5px; cursor:pointer; }
+.panel-tab:hover { color:#c0caf5; }
+.panel-tab.active { color:#7aa2f7; border-color:rgba(122,162,247,.3); background:rgba(122,162,247,.1); }
+.panel-budget { font-size:11px; color:#565f89; margin-left:auto; }
+.panel-content { overflow-y:auto; height:340px; scrollbar-width:thin; scrollbar-color:#2a2b3d #181825; }
+.project-card { background:#1e1e2e; border:1px solid #2a2b3d; border-radius:8px; padding:10px 14px; margin-bottom:8px; }
+.project-card-header { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.project-card-name { font-size:13px; font-weight:600; color:#c0caf5; }
+.project-card-stack { font-size:10px; color:#7aa2f7; background:rgba(122,162,247,.15); padding:1px 6px; border-radius:3px; }
+.score-badge { font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; margin-left:auto; }
+.score-high { background:rgba(158,206,106,.2); color:#9ece6a; }
+.score-mid { background:rgba(224,175,104,.2); color:#e0af68; }
+.score-low { background:rgba(247,118,142,.2); color:#f7768e; }
+.check-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
+.check { font-size:10px; padding:1px 6px; border-radius:3px; }
+.check-ok { background:rgba(158,206,106,.15); color:#9ece6a; }
+.check-fail { background:rgba(247,118,142,.15); color:#f7768e; }
+.check-na { background:rgba(255,255,255,.05); color:#565f89; }
+.suggestion { font-size:11px; color:#a9b1d6; padding:2px 0; }
+.suggestion::before { content:'→ '; color:#565f89; }
+.scan-btn { font-size:11px; color:#7aa2f7; background:rgba(122,162,247,.15); border:1px solid rgba(122,162,247,.25); padding:4px 14px; border-radius:5px; cursor:pointer; }
+.scan-btn:hover { background:rgba(122,162,247,.3); }
+.scan-btn:disabled { opacity:.4; cursor:default; }
+.empty-msg { font-size:12px; color:#565f89; text-align:center; padding:40px 0; }
+.queue-item { background:#1e1e2e; border:1px solid #2a2b3d; border-radius:6px; padding:8px 12px; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
+.queue-status { font-size:10px; padding:2px 6px; border-radius:3px; font-weight:600; }
+.queue-pending { background:rgba(224,175,104,.15); color:#e0af68; }
+.queue-running { background:rgba(122,162,247,.15); color:#7aa2f7; }
+.queue-done { background:rgba(158,206,106,.15); color:#9ece6a; }
+.queue-failed { background:rgba(247,118,142,.15); color:#f7768e; }
+.queue-info { font-size:11px; color:#c0caf5; flex:1; }
+.queue-cost { font-size:10px; color:#565f89; }
 </style>
 </head>
 <body>
@@ -40,7 +78,19 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
   <span class="logo">Sessions</span>
   <div class="chips" id="chips"></div>
   <span class="stats" id="stats"></span>
+  <button class="gear" id="gear-btn" title="Panel del orquestador">&#9881;</button>
   <button class="close" onclick="ipcRenderer.invoke('hide-bar')">✕</button>
+</div>
+<div class="panel" id="panel">
+  <div style="display:flex;align-items:center;">
+    <div class="panel-tabs">
+      <button class="panel-tab active" data-tab="health">Salud</button>
+      <button class="panel-tab" data-tab="queue">Cola</button>
+      <button class="panel-tab" data-tab="log">Log</button>
+    </div>
+    <span class="panel-budget" id="budget-display"></span>
+  </div>
+  <div class="panel-content" id="panel-content"></div>
 </div>
 <script>
 const { ipcRenderer } = require('electron');
@@ -178,6 +228,159 @@ ipcRenderer.on('update-available', (ev, version, url) => {
   upd.addEventListener('click', () => { require('electron').shell.openExternal(url); });
   document.querySelector('.chips').prepend(upd);
 });
+
+// ---- Orchestrator panel ----
+const gearBtn = document.getElementById('gear-btn');
+const panel = document.getElementById('panel');
+const panelContent = document.getElementById('panel-content');
+const budgetDisplay = document.getElementById('budget-display');
+let currentTab = 'health';
+
+gearBtn.addEventListener('click', async () => {
+  const isOpen = await ipcRenderer.invoke('toggle-panel');
+  panel.classList.toggle('open', isOpen);
+  gearBtn.classList.toggle('active', isOpen);
+  if (isOpen) loadTab(currentTab);
+});
+
+document.querySelectorAll('.panel-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.panel-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentTab = btn.dataset.tab;
+    loadTab(currentTab);
+  });
+});
+
+async function loadTab(tab) {
+  // Update budget display
+  try {
+    const budget = await ipcRenderer.invoke('get-budget-status');
+    budgetDisplay.textContent = `$${budget.todaySpent.toFixed(2)} / $${budget.dailyBudget.toFixed(2)}`;
+  } catch {}
+
+  if (tab === 'health') await renderHealth();
+  else if (tab === 'queue') await renderQueue();
+  else if (tab === 'log') await renderLog();
+}
+
+async function renderHealth() {
+  const projects = await ipcRenderer.invoke('get-project-analysis');
+  const entries = Object.entries(projects);
+
+  if (!entries.length) {
+    panelContent.innerHTML = `
+      <div class="empty-msg">
+        No hay datos de proyectos.<br><br>
+        <button class="scan-btn" id="scan-btn">Escanear proyectos</button>
+      </div>`;
+    document.getElementById('scan-btn').addEventListener('click', startScan);
+    return;
+  }
+
+  // Sort by score (ascending — worst first)
+  entries.sort((a, b) => (a[1].score || 5) - (b[1].score || 5));
+
+  let html = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">';
+  html += `<button class="scan-btn" id="scan-btn">Re-escanear</button>`;
+  html += `<span style="font-size:11px;color:#565f89;">${entries.length} proyectos</span>`;
+  html += '</div>';
+
+  for (const [name, proj] of entries) {
+    const s = proj.score || 5;
+    const scoreClass = s >= 7 ? 'score-high' : s >= 4 ? 'score-mid' : 'score-low';
+    const checks = proj.checks || {};
+
+    html += `<div class="project-card">`;
+    html += `<div class="project-card-header">`;
+    html += `<span class="project-card-name">${esc(name)}</span>`;
+    html += `<span class="project-card-stack">${esc(proj.stack || '?')}</span>`;
+    html += `<span class="score-badge ${scoreClass}">${s}/10</span>`;
+    html += `</div>`;
+
+    // Checks row
+    html += `<div class="check-row">`;
+    html += checkBadge('CLAUDE.md', checks.hasClaude);
+    html += checkBadge('.gitignore', checks.hasGitignore);
+    html += checkBadge('Tests', checks.hasTests);
+    html += checkBadge('Git limpio', checks.gitClean);
+    html += checkBadge('Deps ok', checks.depsOk);
+    if (checks.lastCommitDays !== null && checks.lastCommitDays !== undefined) {
+      html += `<span class="check ${checks.lastCommitDays <= 7 ? 'check-ok' : checks.lastCommitDays > 30 ? 'check-fail' : 'check-na'}">${checks.lastCommitDays}d</span>`;
+    }
+    html += `</div>`;
+
+    // Suggestions
+    if (proj.suggestions && proj.suggestions.length) {
+      for (const sug of proj.suggestions) {
+        html += `<div class="suggestion">${esc(sug)}</div>`;
+      }
+    }
+    html += `</div>`;
+  }
+
+  panelContent.innerHTML = html;
+  document.getElementById('scan-btn').addEventListener('click', startScan);
+}
+
+function checkBadge(label, value) {
+  if (value === true) return `<span class="check check-ok">${esc(label)}</span>`;
+  if (value === false) return `<span class="check check-fail">${esc(label)}</span>`;
+  return `<span class="check check-na">${esc(label)}</span>`;
+}
+
+async function startScan() {
+  const btn = document.getElementById('scan-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Escaneando...'; }
+  try {
+    await ipcRenderer.invoke('run-project-scan');
+    await renderHealth();
+  } catch {
+    if (btn) { btn.disabled = false; btn.textContent = 'Error — reintentar'; }
+  }
+}
+
+async function renderQueue() {
+  const queue = await ipcRenderer.invoke('get-queue');
+  if (!queue.length) {
+    panelContent.innerHTML = `<div class="empty-msg">No hay tareas en cola.<br><span style="font-size:11px;color:#565f89;">Las tareas se encolarán automáticamente según el análisis de salud.</span></div>`;
+    return;
+  }
+  let html = '';
+  for (const task of queue) {
+    const statusClass = task.status === 'pending' ? 'queue-pending' :
+                        task.status === 'running' ? 'queue-running' :
+                        task.status === 'done' ? 'queue-done' : 'queue-failed';
+    html += `<div class="queue-item">`;
+    html += `<span class="queue-status ${statusClass}">${esc(task.status)}</span>`;
+    html += `<span class="queue-info">${esc(task.project || '?')} — ${esc(task.skill || '?')}</span>`;
+    if (task.costUsd) html += `<span class="queue-cost">$${task.costUsd.toFixed(3)}</span>`;
+    html += `</div>`;
+  }
+  panelContent.innerHTML = html;
+}
+
+async function renderLog() {
+  const log = await ipcRenderer.invoke('get-execution-log');
+  if (!log.length) {
+    panelContent.innerHTML = `<div class="empty-msg">No hay ejecuciones registradas.</div>`;
+    return;
+  }
+  let html = '';
+  for (const entry of log.reverse()) {
+    const statusClass = entry.status === 'done' ? 'queue-done' : 'queue-failed';
+    const time = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '?';
+    html += `<div class="queue-item">`;
+    html += `<span class="queue-status ${statusClass}">${esc(entry.status || '?')}</span>`;
+    html += `<span class="queue-info">${esc(entry.project || '?')} — ${esc(entry.skill || '?')}</span>`;
+    if (entry.costUsd) html += `<span class="queue-cost">$${entry.costUsd.toFixed(3)}</span>`;
+    html += `<span class="queue-cost">${esc(time)}</span>`;
+    html += `</div>`;
+  }
+  panelContent.innerHTML = html;
+}
+
+function esc(str) { return String(str || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
 
 // Show setup chip if hook is missing
 ipcRenderer.on('hook-missing', () => {

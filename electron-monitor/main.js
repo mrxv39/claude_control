@@ -2,6 +2,9 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, Notification, shell } = require
 const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const store = require('./lib/orchestrator-store');
+const scanner = require('./lib/project-scanner');
+const analyzer = require('./lib/project-analyzer');
 const koffi = require('koffi');
 
 // Win32
@@ -631,6 +634,56 @@ ipcMain.handle('run-setup-hook', async () => {
   } catch { return false; }
 });
 
+// ---- Orchestrator IPC handlers ----
+let panelOpen = false;
+const PANEL_H = 400;
+const BAR_H = 48;
+
+ipcMain.handle('toggle-panel', () => {
+  if (!mainWindow) return;
+  panelOpen = !panelOpen;
+  const [w] = mainWindow.getSize();
+  const [x, y] = mainWindow.getPosition();
+
+  if (panelOpen) {
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.setResizable(true);
+    mainWindow.setBounds({ x, y, width: Math.max(w, 700), height: BAR_H + PANEL_H });
+    mainWindow.setResizable(false);
+  } else {
+    mainWindow.setResizable(true);
+    mainWindow.setBounds({ x, y, width: w, height: BAR_H });
+    mainWindow.setResizable(false);
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  }
+  return panelOpen;
+});
+
+ipcMain.handle('get-orchestrator-config', () => store.load());
+ipcMain.handle('set-orchestrator-config', (ev, partial) => store.update(partial));
+
+ipcMain.handle('get-project-analysis', () => store.getProjects());
+
+ipcMain.handle('run-project-scan', async () => {
+  const config = store.load();
+  const projects = await scanner.scan(config.projectDirs);
+  const analysis = await analyzer.analyzeAll(projects);
+  store.setProjects(analysis);
+  store.update({ lastFullScan: new Date().toISOString() });
+  return analysis;
+});
+
+ipcMain.handle('get-queue', () => store.getQueue());
+ipcMain.handle('get-execution-log', () => store.readLog(50));
+ipcMain.handle('get-budget-status', () => {
+  const config = store.load();
+  return {
+    todaySpent: config.todaySpentUsd,
+    dailyBudget: config.dailyBudgetUsd,
+    remaining: store.budgetRemaining()
+  };
+});
+
 app.setAppUserModelId('com.claudio.monitor');
 
 // Single instance lock — if already running, focus the existing one
@@ -652,6 +705,17 @@ app.whenReady().then(() => {
     checkHookSetup();
     checkForUpdates();
     setInterval(checkForUpdates, 6 * 60 * 60 * 1000); // every 6h
+    // Auto-scan projects if last scan > 24h ago
+    const config = store.load();
+    const lastScan = config.lastFullScan ? new Date(config.lastFullScan).getTime() : 0;
+    if (Date.now() - lastScan > 24 * 60 * 60 * 1000) {
+      scanner.scan(config.projectDirs).then(projects => {
+        analyzer.analyzeAll(projects).then(analysis => {
+          store.setProjects(analysis);
+          store.update({ lastFullScan: new Date().toISOString() });
+        });
+      }).catch(() => {});
+    }
   });
 });
 app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
