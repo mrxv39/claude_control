@@ -80,6 +80,7 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
   <span class="logo">Sessions</span>
   <div class="chips" id="chips"></div>
   <span class="stats" id="stats"></span>
+  <span id="idle-indicator" style="display:none;font-size:10px;color:#bb9af7;background:rgba(187,154,247,.15);padding:2px 6px;border-radius:3px;flex-shrink:0;-webkit-app-region:no-drag;" title="Ejecutando tareas automáticas"></span>
   <button class="gear" id="gear-btn" title="Panel del orquestador">&#9881;</button>
   <button class="close" onclick="ipcRenderer.invoke('hide-bar')">✕</button>
 </div>
@@ -234,6 +235,23 @@ async function refresh() {
     }).catch(() => {});
   }
   render(sessions);
+  // Update idle indicator
+  try {
+    const sched = await ipcRenderer.invoke('get-scheduler-status');
+    const ind = document.getElementById('idle-indicator');
+    if (sched.running) {
+      const label = sched.currentMode === 'idle' ? 'AUTO-IDLE' : 'AUTO';
+      ind.textContent = label;
+      ind.style.display = '';
+    } else if (sched.userIsIdle && sched.idleEnabled && !sched.paused) {
+      ind.textContent = `idle ${sched.userIdleFor}m`;
+      ind.style.display = '';
+      ind.style.color = '#565f89';
+      ind.style.background = 'rgba(255,255,255,.05)';
+    } else {
+      ind.style.display = 'none';
+    }
+  } catch {}
 }
 refresh();
 setInterval(refresh, 3000);
@@ -449,6 +467,17 @@ async function renderQueue() {
   html += `<input type="text" id="blacklist-input" value="${esc(bl)}" placeholder="proyecto1, proyecto2" style="flex:1;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 8px;font-size:11px;">`;
   html += `</div>`;
 
+  // Idle mode config
+  const idleChecked = status.idleEnabled ? 'checked' : '';
+  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">`;
+  html += `<label style="font-size:10px;color:#565f89;">Modo idle:</label>`;
+  html += `<input type="checkbox" id="idle-enabled" ${idleChecked} style="-webkit-app-region:no-drag;">`;
+  html += `<label style="font-size:10px;color:#565f89;">Ejecutar tras</label>`;
+  html += `<input type="number" id="idle-minutes" value="${status.idleMinutes}" min="5" max="120" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
+  html += `<span style="font-size:10px;color:#565f89;">min inactivo</span>`;
+  html += `<span style="font-size:10px;color:#bb9af7;margin-left:auto;">Idle actual: ${status.userIdleFor} min</span>`;
+  html += `</div>`;
+
   if (!queue.length) {
     html += `<div class="empty-msg">No hay tareas en cola.<br><span style="font-size:11px;color:#565f89;">Se encolarán automáticamente fuera de horario según la salud de los proyectos.</span></div>`;
   } else {
@@ -488,7 +517,9 @@ async function renderQueue() {
     const budget = parseFloat(document.getElementById('budget-input').value) || 2;
     const blacklistStr = document.getElementById('blacklist-input').value || '';
     const blacklist = blacklistStr.split(',').map(s => s.trim()).filter(Boolean);
-    await ipcRenderer.invoke('set-orchestrator-config', { workHours: { start, end }, dailyBudgetUsd: budget, blacklist });
+    const idleEnabled = document.getElementById('idle-enabled').checked;
+    const idleMinutes = parseInt(document.getElementById('idle-minutes').value) || 15;
+    await ipcRenderer.invoke('set-orchestrator-config', { workHours: { start, end }, dailyBudgetUsd: budget, blacklist, idleEnabled, idleMinutes });
     renderQueue();
   });
   if (addTaskBtn) addTaskBtn.addEventListener('click', () => showAddTaskDialog());

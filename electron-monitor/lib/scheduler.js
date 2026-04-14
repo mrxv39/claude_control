@@ -1,18 +1,17 @@
 /**
- * scheduler.js — Autonomous task scheduler for off-hours execution.
+ * scheduler.js — Autonomous task scheduler.
  *
- * Every 60s checks:
- *   1. Are we outside work hours?
- *   2. Is there budget remaining?
- *   3. Are there no user BUSY sessions? (don't compete for resources)
- *   4. Is there a pending task in the queue?
+ * Two modes (both active simultaneously):
+ *   1. OFF-HOURS: outside work hours → always execute if budget available
+ *   2. IDLE: within work hours, user inactive >15min → execute opportunistically
  *
- * If all yes → execute the next task via executor.js
- * If queue is empty and analysis exists → auto-enqueue based on project scores.
+ * Every 60s checks conditions and executes next task if appropriate.
+ * Stops immediately if user becomes active (new JSONL activity or BUSY session).
  */
 
 const store = require('./orchestrator-store');
 const executor = require('./executor');
+const tokenMonitor = require('./token-monitor');
 
 const CHECK_INTERVAL = 60 * 1000; // 60 seconds
 
@@ -147,20 +146,39 @@ function autoEnqueue() {
   return enqueued;
 }
 
+let currentMode = null; // 'off-hours' | 'idle' | null
+
 async function tick() {
   if (running || paused) return;
 
-  // Check conditions
-  if (!isOutsideWorkHours()) {
-    notifyStatus('waiting', 'Dentro de horario laboral');
+  const config = store.load();
+  const outsideHours = isOutsideWorkHours();
+  const idle = config.idleEnabled && tokenMonitor.isUserIdle(config.idleMinutes || 15);
+  const busy = await hasUserBusySessions();
+
+  // Determine execution mode
+  if (outsideHours && !busy) {
+    currentMode = 'off-hours';
+  } else if (!outsideHours && idle && !busy) {
+    currentMode = 'idle';
+  } else {
+    currentMode = null;
+    // If user is active and we were in idle mode, emergency stop
+    if (!idle && running) {
+      executor.emergencyStop();
+      running = false;
+      notifyStatus('stopped', 'Usuario activo — ejecución detenida');
+      return;
+    }
+    const reason = busy ? 'Sesiones activas — esperando' :
+                   !outsideHours && !idle ? `Idle: ${Math.round(tokenMonitor.getIdleMinutes())}/${config.idleMinutes || 15} min` :
+                   'Esperando';
+    notifyStatus('waiting', reason);
     return;
   }
+
   if (!hasBudget()) {
     notifyStatus('waiting', 'Sin presupuesto restante hoy');
-    return;
-  }
-  if (await hasUserBusySessions()) {
-    notifyStatus('waiting', 'Sesiones del usuario activas — esperando');
     return;
   }
 
@@ -183,12 +201,19 @@ async function tick() {
 
   // Execute
   running = true;
-  store.updateQueueTask(task.id, { status: 'running', startedAt: new Date().toISOString() });
-  notifyStatus('running', `Ejecutando ${task.skill} en ${task.project}`);
+  const modeLabel = currentMode === 'idle' ? '[IDLE]' : '[OFF-HOURS]';
+  store.updateQueueTask(task.id, { status: 'running', startedAt: new Date().toISOString(), mode: currentMode });
+  notifyStatus('running', `${modeLabel} Ejecutando ${task.skill} en ${task.project}`);
 
   try {
     const result = await executor.execute(task, (line) => {
-      notifyStatus('running', `${task.skill} en ${task.project}: procesando...`);
+      // If in idle mode, check if user came back
+      if (currentMode === 'idle' && !tokenMonitor.isUserIdle(2)) {
+        executor.emergencyStop();
+        notifyStatus('stopped', 'Usuario activo — ejecución detenida');
+      } else {
+        notifyStatus('running', `${modeLabel} ${task.skill} en ${task.project}`);
+      }
     });
 
     store.updateQueueTask(task.id, {
@@ -254,10 +279,16 @@ function resume() {
 
 function getStatus() {
   const config = store.load();
+  const idleMin = tokenMonitor.getIdleMinutes();
   return {
     running,
     paused,
+    currentMode,
     outsideWorkHours: isOutsideWorkHours(),
+    idleEnabled: config.idleEnabled !== false,
+    idleMinutes: config.idleMinutes || 15,
+    userIdleFor: Math.round(idleMin),
+    userIsIdle: tokenMonitor.isUserIdle(config.idleMinutes || 15),
     budgetRemaining: store.budgetRemaining(),
     todaySpent: config.todaySpentUsd,
     dailyBudget: config.dailyBudgetUsd,

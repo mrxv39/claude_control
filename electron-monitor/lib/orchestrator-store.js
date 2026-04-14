@@ -25,6 +25,8 @@ const DEFAULTS = {
   blacklist: ['substract'],
   priorityRules: { high: 7, medium: 30 },
   priorityOverrides: {},  // { projectName: 'high'|'medium'|'ignored' }
+  idleEnabled: true,
+  idleMinutes: 15,
   projects: {},
   queue: []
 };
