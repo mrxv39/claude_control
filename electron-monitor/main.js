@@ -642,6 +642,8 @@ ipcMain.handle('run-setup-hook', async () => {
 let panelOpen = false;
 const BAR_H = 48;
 
+let barBoundsBeforePanel = null;
+
 ipcMain.handle('toggle-panel', () => {
   if (!mainWindow) return;
   panelOpen = !panelOpen;
@@ -649,6 +651,11 @@ ipcMain.handle('toggle-panel', () => {
   const wa = screen.getPrimaryDisplay().workArea;
 
   if (panelOpen) {
+    // Save bar position before opening panel
+    const [bx, by] = mainWindow.getPosition();
+    const [bw] = mainWindow.getSize();
+    barBoundsBeforePanel = { x: bx, y: by, width: bw };
+
     // Take most of the screen, centered
     const panelW = Math.min(Math.max(900, Math.round(wa.width * 0.7)), wa.width);
     const panelH = Math.min(Math.round(wa.height * 0.75), wa.height);
@@ -660,10 +667,13 @@ ipcMain.handle('toggle-panel', () => {
     mainWindow.setResizable(false);
     mainWindow.focus();
   } else {
+    // Restore bar to its original position
+    const b = barBoundsBeforePanel || { x: wa.x, y: wa.y, width: 600 };
     mainWindow.setResizable(true);
-    mainWindow.setBounds({ x, y, width: w, height: BAR_H });
+    mainWindow.setBounds({ x: b.x, y: b.y, width: b.width, height: BAR_H });
     mainWindow.setResizable(false);
     mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    barBoundsBeforePanel = null;
   }
   return panelOpen;
 });
