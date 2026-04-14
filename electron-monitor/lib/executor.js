@@ -17,7 +17,7 @@ const RUNS_DIR = path.join(store.STATE_DIR, 'runs');
 const SKILLS = {
   'audit-claude-md': {
     model: 'haiku',
-    budgetUsd: 0.02,
+    budgetUsd: 0.15,
     prompt: `Analiza este proyecto y su CLAUDE.md (si existe). Si no existe, crea uno con: arquitectura, comandos de build/test/dev, convenciones, archivos clave, y gotchas. Si existe, mejóralo con información que falte. Se conciso y práctico. Solo modifica CLAUDE.md, nada más.`
   },
   'security-review': {
@@ -42,7 +42,7 @@ const SKILLS = {
   },
   'git-cleanup': {
     model: 'haiku',
-    budgetUsd: 0.02,
+    budgetUsd: 0.10,
     prompt: `Limpia este repositorio git: elimina ramas locales ya mergeadas (excepto master/main), verifica que .gitignore cubre node_modules, dist, build, .env, *.log, y otros patrones comunes para el stack del proyecto. Solo modifica .gitignore si le faltan entradas importantes.`
   }
 };
@@ -157,17 +157,16 @@ async function execute(task, onProgress) {
   return new Promise(resolve => {
     const args = [
       '--print',
-      skill.prompt,
+      '-p', skill.prompt,
       '--model', skill.model,
       '--max-budget-usd', String(skill.budgetUsd),
       '--output-format', 'text',
-      '--permission-mode', 'bypassPermissions',
       '--dangerously-skip-permissions'
     ];
 
     const proc = spawn('claude', args, {
       cwd: task.projectPath,
-      shell: true,
+      shell: false,
       timeout: 5 * 60 * 1000, // 5 min max per task
       env: { ...process.env }
     });
