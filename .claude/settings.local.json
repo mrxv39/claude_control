@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -f /c/Users/Usuario/.claude/claudio-state/overlay-debug.log)",
+      "Bash(powershell.exe -NoProfile -Command 'Get-Process -Name electron -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.Id -Force }')",
+      "Bash(npx electron:*)",
+      "Bash(rm -f /c/Users/Usuario/.claude/claudio-state/debug.log)",
+      "Read(//tmp/**)"
+    ]
+  }
+}
