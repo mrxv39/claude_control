@@ -623,8 +623,8 @@ function setupStatusLine() {
     const settingsPath = path.join(process.env.USERPROFILE, '.claude', 'settings.json');
     if (!fs.existsSync(settingsPath)) return;
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    if (settings.statusLine && settings.statusLine.includes('statusline-writer')) return; // already set
-    const scriptPath = resolveScript('lib/statusline-writer.js').replace(/\\/g, '\\\\');
+    if (settings.statusLine && settings.statusLine.includes('statusline-writer') && !settings.statusLine.includes('\\\\\\\\')) return; // already set correctly
+    const scriptPath = resolveScript('lib/statusline-writer.js');
     settings.statusLine = `node "${scriptPath}"`;
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
   } catch {}
