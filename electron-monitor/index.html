@@ -160,8 +160,9 @@ function render(sessions) {
         if (!git || !git.branch) return;
         const badge = document.createElement('span');
         badge.className = 'git-badge' + (git.dirty > 0 ? ' git-dirty' : '');
-        badge.textContent = git.branch + (git.dirty > 0 ? ` +${git.dirty}` : '');
-        badge.title = git.recentCommits.join('\n');
+        const shortBranch = git.branch.length > 16 ? git.branch.slice(0, 15) + '\u2026' : git.branch;
+        badge.textContent = shortBranch + (git.dirty > 0 ? ` +${git.dirty}` : '');
+        badge.title = git.branch + '\n' + git.recentCommits.join('\n');
         mainDiv.appendChild(badge);
       }).catch(() => {});
     }
