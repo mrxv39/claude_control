@@ -30,6 +30,10 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
 .svc { font-size:9px; color:#7aa2f7; background:rgba(122,162,247,.15); padding:1px 6px; border-radius:3px; cursor:pointer; }
 .svc:hover { background:rgba(122,162,247,.35); filter:brightness(1.2); }
 .git-badge { font-size:9px; color:#bb9af7; background:rgba(187,154,247,.12); padding:1px 5px; border-radius:3px; margin-left:4px; }
+.ctx-badge { font-size:9px; padding:1px 5px; border-radius:3px; margin-left:4px; }
+.ctx-low { color:#9ece6a; background:rgba(158,206,106,.12); }
+.ctx-mid { color:#e0af68; background:rgba(224,175,104,.12); }
+.ctx-high { color:#f7768e; background:rgba(247,118,142,.12); }
 .git-dirty { color:#e0af68; background:rgba(224,175,104,.12); }
 .chip.update { background:rgba(224,175,104,.2); border-color:rgba(224,175,104,.4); cursor:pointer; }
 .chip.setup { background:rgba(224,175,104,.2); border-color:rgba(224,175,104,.4); cursor:pointer; }
@@ -163,7 +167,12 @@ function render(sessions) {
       const cls = cached.dirty > 0 ? 'git-badge git-dirty' : 'git-badge';
       gitHtml = `<span class="${cls}" title="${cached.branch}">${shortBranch}${cached.dirty > 0 ? ' +' + cached.dirty : ''}</span>`;
     }
-    mainDiv.innerHTML = `<span class="dot"></span><span class="name">${s.project}</span>${run}${gitHtml}`;
+    let ctxHtml = '';
+    if (s.isClaude && ctx > 0) {
+      const ctxCls = ctx < 50 ? 'ctx-low' : ctx < 80 ? 'ctx-mid' : 'ctx-high';
+      ctxHtml = `<span class="ctx-badge ${ctxCls}">${ctx}%</span>`;
+    }
+    mainDiv.innerHTML = `<span class="dot"></span><span class="name">${s.project}</span>${run}${gitHtml}${ctxHtml}`;
     d.appendChild(mainDiv);
 
     // Context usage bar (only for Claude sessions)
@@ -239,19 +248,28 @@ async function refresh() {
   try {
     const sched = await ipcRenderer.invoke('get-scheduler-status');
     const ind = document.getElementById('idle-indicator');
-    if (sched.running) {
+    if (sched.rateLimits) {
+      const pct = sched.rateLimits.fiveHour.usedPercent;
+      const p = sched.pacingDecision;
+      const color = pct < 50 ? '#9ece6a' : pct < 80 ? '#e0af68' : '#f7768e';
+      let label = `5h:${pct}%`;
+      if (p && p.targetUsage !== undefined) label += `→${p.targetUsage}%`;
+      if (p && p.action === 'burst') label += ' BURST';
+      else if (p && p.action === 'coast') label += ' coast';
+      if (sched.running) {
+        const modeTag = { 'off-hours': 'AUTO', 'idle': 'IDLE', 'capacity': 'CAP' }[sched.currentMode] || 'AUTO';
+        label += ' ' + modeTag;
+      }
+      ind.textContent = label;
+      ind.style.display = '';
+      ind.style.color = color;
+      ind.style.background = color + '22';
+    } else if (sched.running) {
       const modeLabels = { 'off-hours': 'AUTO', 'idle': 'AUTO-IDLE', 'capacity': 'AUTO-CAP' };
       ind.textContent = modeLabels[sched.currentMode] || 'AUTO';
       ind.style.display = '';
       ind.style.color = '#bb9af7';
       ind.style.background = 'rgba(187,154,247,.15)';
-    } else if (sched.rateLimits) {
-      const pct = sched.rateLimits.fiveHour.usedPercent;
-      const color = pct < 50 ? '#9ece6a' : pct < 80 ? '#e0af68' : '#f7768e';
-      ind.textContent = `5h:${pct}%`;
-      ind.style.display = '';
-      ind.style.color = color;
-      ind.style.background = color + '22';
     } else if (sched.userIsIdle && sched.idleEnabled && !sched.paused) {
       ind.textContent = `idle ${sched.userIdleFor}m`;
       ind.style.display = '';
@@ -315,7 +333,7 @@ async function loadTab(tab) {
   else if (tab === 'log') await renderLog();
 }
 
-let healthFilter = 'all'; // 'all', 'high', 'medium', 'ignored'
+let healthFilter = 'all'; // 'all', 'high', 'medium', 'low', 'ignored'
 
 async function renderHealth() {
   const projects = await ipcRenderer.invoke('get-project-analysis');
@@ -334,18 +352,18 @@ async function renderHealth() {
   }
 
   // Count per priority
-  const counts = { high: 0, medium: 0, ignored: 0 };
-  entries.forEach(([name]) => { const p = priorities[name] || 'ignored'; counts[p]++; });
+  const counts = { high: 0, medium: 0, low: 0, ignored: 0 };
+  entries.forEach(([name]) => { const p = priorities[name] || 'ignored'; counts[p] = (counts[p] || 0) + 1; });
 
   // Filter
   const filtered = healthFilter === 'all' ? entries :
     entries.filter(([name]) => (priorities[name] || 'ignored') === healthFilter);
 
   // Sort: high priority first, then by score ascending
-  const priorityOrder = { high: 0, medium: 1, ignored: 2 };
+  const priorityOrder = { high: 0, medium: 1, low: 2, ignored: 3 };
   filtered.sort((a, b) => {
-    const pA = priorityOrder[priorities[a[0]] || 'ignored'] || 2;
-    const pB = priorityOrder[priorities[b[0]] || 'ignored'] || 2;
+    const pA = priorityOrder[priorities[a[0]] || 'ignored'] || 3;
+    const pB = priorityOrder[priorities[b[0]] || 'ignored'] || 3;
     if (pA !== pB) return pA - pB;
     return (a[1].score || 5) - (b[1].score || 5);
   });
@@ -359,6 +377,7 @@ async function renderHealth() {
   html += fBtn('all', 'Todos', entries.length);
   html += fBtn('high', 'Alta', counts.high);
   html += fBtn('medium', 'Media', counts.medium);
+  html += fBtn('low', 'Baja', counts.low);
   html += fBtn('ignored', 'Ignorados', counts.ignored);
   html += '</div>';
 
@@ -367,7 +386,7 @@ async function renderHealth() {
     const scoreClass = s >= 7 ? 'score-high' : s >= 4 ? 'score-mid' : 'score-low';
     const checks = proj.checks || {};
     const prio = priorities[name] || 'ignored';
-    const prioColor = prio === 'high' ? '#9ece6a' : prio === 'medium' ? '#e0af68' : '#565f89';
+    const prioColor = prio === 'high' ? '#9ece6a' : prio === 'medium' ? '#e0af68' : prio === 'low' ? '#7aa2f7' : '#565f89';
     const isOverride = (config.priorityOverrides || {})[name] ? true : false;
 
     html += `<div class="project-card" style="${prio === 'ignored' ? 'opacity:.5;' : ''}">`;
@@ -376,6 +395,7 @@ async function renderHealth() {
     html += `<select class="prio-select" data-project="${esc(name)}" style="font-size:10px;padding:1px 4px;border-radius:3px;border:1px solid ${prioColor}44;background:${prioColor}22;color:${prioColor};cursor:pointer;${isOverride ? 'font-weight:700;' : ''}">`;
     html += `<option value="high"${prio === 'high' ? ' selected' : ''}>ALTA</option>`;
     html += `<option value="medium"${prio === 'medium' ? ' selected' : ''}>MEDIA</option>`;
+    html += `<option value="low"${prio === 'low' ? ' selected' : ''}>BAJA</option>`;
     html += `<option value="ignored"${prio === 'ignored' ? ' selected' : ''}>IGNORADO</option>`;
     if (isOverride) html += `<option value="auto">AUTO</option>`;
     html += `</select>`;
@@ -487,39 +507,65 @@ async function renderQueue() {
   html += `<span style="font-size:10px;color:#bb9af7;margin-left:auto;">Idle actual: ${status.userIdleFor} min</span>`;
   html += `</div>`;
 
-  // Capacity mode config
+  // Capacity mode config with pacing
   const capChecked = status.capacityEnabled ? 'checked' : '';
   const rl = status.rateLimits;
-  const rlStr = rl ? `5h: ${rl.fiveHour.usedPercent}%` : 'sin datos (statusLine pendiente)';
+  const p = status.pacingDecision;
+  const rlStr = rl ? `5h: ${rl.fiveHour.usedPercent}%` : 'sin datos';
+  const pacingStr = p && p.cycle ? ` | ${p.action} (${p.cycle.remainingMin}m restantes, target ${p.targetUsage}%)` : '';
   html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">`;
-  html += `<label style="font-size:10px;color:#565f89;">Modo capacity:</label>`;
+  html += `<label style="font-size:10px;color:#565f89;">Pacing:</label>`;
   html += `<input type="checkbox" id="capacity-enabled" ${capChecked} style="-webkit-app-region:no-drag;">`;
-  html += `<label style="font-size:10px;color:#565f89;">Ejecutar si uso <</label>`;
-  html += `<input type="number" id="capacity-threshold" value="${status.capacityThreshold}" min="10" max="90" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
-  html += `<span style="font-size:10px;color:#565f89;">%</span>`;
-  html += `<span style="font-size:10px;color:#9ece6a;margin-left:auto;">${rlStr}</span>`;
+  html += `<label style="font-size:10px;color:#565f89;">Tick:</label>`;
+  html += `<span style="font-size:10px;color:#e0af68;">${Math.round((status.tickInterval || 60000) / 1000)}s</span>`;
+  html += `<input type="number" id="capacity-threshold" value="${status.capacityThreshold}" min="10" max="90" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;display:none;">`;
+  html += `<span style="font-size:10px;color:#9ece6a;margin-left:auto;">${rlStr}${pacingStr}</span>`;
   html += `</div>`;
 
   if (!queue.length) {
     html += `<div class="empty-msg">No hay tareas en cola.<br><span style="font-size:11px;color:#565f89;">Se encolarán automáticamente fuera de horario según la salud de los proyectos.</span></div>`;
   } else {
-    // Show tasks grouped: running first, then pending, then done/failed
-    const order = { running: 0, pending: 1, done: 2, failed: 3, skipped: 4 };
-    const sorted = [...queue].sort((a, b) => (order[a.status] || 5) - (order[b.status] || 5));
+    // Split into active (running/pending) and completed (done/failed)
+    const active = queue.filter(t => t.status === 'running' || t.status === 'pending');
+    const completed = queue.filter(t => t.status === 'done' || t.status === 'failed' || t.status === 'skipped');
 
-    for (const task of sorted) {
-      const statusClass = task.status === 'pending' ? 'queue-pending' :
-                          task.status === 'running' ? 'queue-running' :
-                          task.status === 'done' ? 'queue-done' : 'queue-failed';
-      html += `<div class="queue-item">`;
-      html += `<span class="queue-status ${statusClass}">${esc(task.status)}</span>`;
-      html += `<span class="queue-info">${esc(task.project || '?')} — ${esc(task.skill || '?')}`;
-      if (task.branch) html += ` <span style="color:#7aa2f7;font-size:10px;">${esc(task.branch)}</span>`;
-      html += `</span>`;
-      if (task.costUsd) html += `<span class="queue-cost">$${task.costUsd.toFixed(3)}</span>`;
-      if (task.duration) html += `<span class="queue-cost">${task.duration}s</span>`;
-      if (task.status === 'pending') html += `<span class="queue-cost" style="color:#f7768e;cursor:pointer;" data-remove="${task.id}">✕</span>`;
-      html += `</div>`;
+    // Active tasks first
+    if (active.length) {
+      const orderA = { running: 0, pending: 1 };
+      active.sort((a, b) => (orderA[a.status] || 2) - (orderA[b.status] || 2));
+      html += `<div style="font-size:10px;color:#565f89;margin-bottom:4px;">Pendientes (${active.length})</div>`;
+      for (const task of active) {
+        const statusClass = task.status === 'pending' ? 'queue-pending' : 'queue-running';
+        html += `<div class="queue-item">`;
+        html += `<span class="queue-status ${statusClass}">${esc(task.status)}</span>`;
+        html += `<span class="queue-info">${esc(task.project || '?')} — ${esc(task.skill || '?')}</span>`;
+        if (task.status === 'pending') html += `<span class="queue-cost" style="color:#f7768e;cursor:pointer;" data-remove="${task.id}">✕</span>`;
+        html += `</div>`;
+      }
+    }
+
+    // Completed: most recent first, show time
+    if (completed.length) {
+      completed.sort((a, b) => {
+        const ta = a.completedAt || a.startedAt || '';
+        const tb = b.completedAt || b.startedAt || '';
+        return tb.localeCompare(ta);
+      });
+      html += `<div style="font-size:10px;color:#565f89;margin:8px 0 4px;">Últimas ejecuciones (${completed.length})</div>`;
+      for (const task of completed.slice(0, 30)) {
+        const statusClass = task.status === 'done' ? 'queue-done' : 'queue-failed';
+        const time = (task.completedAt || task.startedAt || '').slice(11, 16);
+        const durStr = task.duration ? `${task.duration}s` : '';
+        const changesBadge = task.hasChanges ? ' <span style="color:#9ece6a;font-size:9px;">+cambios</span>' : '';
+        html += `<div class="queue-item">`;
+        html += `<span style="font-size:9px;color:#565f89;min-width:36px;">${time}</span>`;
+        html += `<span class="queue-status ${statusClass}">${esc(task.status)}</span>`;
+        html += `<span class="queue-info">${esc(task.project || '?')} — ${esc(task.skill || '?')}${changesBadge}`;
+        if (task.branch) html += ` <span style="color:#7aa2f7;font-size:9px;">${esc(task.branch)}</span>`;
+        html += `</span>`;
+        if (durStr) html += `<span class="queue-cost">${durStr}</span>`;
+        html += `</div>`;
+      }
     }
   }
 

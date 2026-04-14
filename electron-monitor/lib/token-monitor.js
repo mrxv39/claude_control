@@ -144,14 +144,111 @@ function getRateLimits() {
 }
 
 /**
- * Check if there's spare capacity in the 5-hour window.
- * @param {number} threshold — max % used to consider "spare" (default 50)
- * @returns {boolean} true if usage < threshold
+ * Get enriched cycle state from rate limits data.
+ * Derives progress (0..1), remaining minutes, and staleness from resetsAt.
  */
-function hasSpareCapacity(threshold = 50) {
+function getCycleInfo() {
   const rl = getRateLimits();
-  if (!rl) return false; // no data → be conservative
-  return rl.fiveHour.usedPercent < threshold;
+  if (!rl) return null;
+
+  const now = Date.now() / 1000; // unix seconds
+  const resetsAt = rl.fiveHour.resetsAt;
+  const cycleLen = 5 * 3600;
+  const cycleStart = resetsAt - cycleLen;
+  const elapsed = Math.max(0, now - cycleStart);
+  const remaining = Math.max(0, resetsAt - now);
+  const progress = Math.min(1, elapsed / cycleLen);
+
+  return {
+    usedPercent: rl.fiveHour.usedPercent,
+    sevenDayPercent: rl.sevenDay.usedPercent,
+    remainingMin: Math.round(remaining / 60),
+    progress,
+    resetsAt,
+    isStale: !rl.updatedAt || (Date.now() - rl.updatedAt) > 10 * 60 * 1000
+  };
 }
 
-module.exports = { getLastUserActivity, getIdleMinutes, isUserIdle, getRateLimits, hasSpareCapacity };
+/**
+ * Core pacing function. Compares actual usage against an ideal curve
+ * parameterized by time elapsed in the 5h cycle.
+ *
+ * Curve: targetUsage = progress^exponent × maxTarget
+ * Returns { action, reason, cycle, targetUsage, delta }
+ *
+ * Actions: 'burst' | 'accelerate' | 'pace' | 'coast' | 'wait'
+ */
+function getPacingDecision(config = {}) {
+  const maxTarget = config.pacingMaxTarget || 95;
+  const exponent = config.pacingExponent || 0.6;
+  const sevenDayThrottle = config.sevenDayThrottle || 80;
+  const sevenDayCaution = config.sevenDayCaution || 60;
+
+  const cycle = getCycleInfo();
+  if (!cycle) return { action: 'wait', reason: 'sin datos de rate limit' };
+
+  // 7-day guard
+  if (cycle.sevenDayPercent > sevenDayThrottle) {
+    return { action: 'coast', reason: `7d al ${cycle.sevenDayPercent}% (>${sevenDayThrottle}%)`, cycle, targetUsage: 0, delta: 0 };
+  }
+
+  // 7-day caution: reduce target
+  let effectiveMax = maxTarget;
+  if (cycle.sevenDayPercent > sevenDayCaution) {
+    effectiveMax = Math.min(effectiveMax, 70);
+  }
+
+  const targetUsage = Math.round(Math.pow(cycle.progress, exponent) * effectiveMax);
+  const delta = targetUsage - cycle.usedPercent;
+
+  let action, reason;
+  if (cycle.remainingMin <= 30 && delta > 10) {
+    action = 'burst';
+    reason = `${cycle.remainingMin}m left, ${delta}% bajo target`;
+  } else if (delta > 15) {
+    action = 'burst';
+    reason = `${delta}% bajo target`;
+  } else if (delta > 5) {
+    action = 'accelerate';
+    reason = `${delta}% bajo target`;
+  } else if (delta > -5) {
+    action = 'pace';
+    reason = `on track (delta ${delta > 0 ? '+' : ''}${delta}%)`;
+  } else {
+    action = 'coast';
+    reason = `${-delta}% sobre target`;
+  }
+
+  return { action, reason, cycle, targetUsage, delta };
+}
+
+/**
+ * Recommended scheduler tick interval based on pacing action.
+ */
+function getRecommendedInterval(action) {
+  switch (action) {
+    case 'burst':      return 15 * 1000;
+    case 'accelerate': return 30 * 1000;
+    case 'pace':       return 60 * 1000;
+    case 'coast':      return 120 * 1000;
+    default:           return 60 * 1000;
+  }
+}
+
+/**
+ * Check if there's spare capacity in the 5-hour window.
+ * Delegates to pacing decision for backward compatibility.
+ * @param {number} threshold — ignored when pacing is active
+ * @returns {boolean} true if pacing says execute
+ */
+function hasSpareCapacity(threshold = 50) {
+  const decision = getPacingDecision();
+  if (decision.action === 'wait') return false;
+  return decision.action !== 'coast';
+}
+
+module.exports = {
+  getLastUserActivity, getIdleMinutes, isUserIdle,
+  getRateLimits, hasSpareCapacity,
+  getCycleInfo, getPacingDecision, getRecommendedInterval
+};

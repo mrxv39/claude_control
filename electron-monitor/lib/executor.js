@@ -13,39 +13,36 @@ const store = require('./orchestrator-store');
 
 const RUNS_DIR = path.join(store.STATE_DIR, 'runs');
 
-// Skill definitions: prompt, model, budget
+// Skill definitions: prompt, model
+// Models: opus for deep analysis, sonnet for lighter tasks
 const SKILLS = {
   'audit-claude-md': {
-    model: 'haiku',
-    budgetUsd: 0.15,
+    model: 'sonnet',
     prompt: `Analiza este proyecto y su CLAUDE.md (si existe). Si no existe, crea uno con: arquitectura, comandos de build/test/dev, convenciones, archivos clave, y gotchas. Si existe, mejóralo con información que falte. Se conciso y práctico. Solo modifica CLAUDE.md, nada más.`
   },
   'security-review': {
-    model: 'sonnet',
-    budgetUsd: 0.10,
+    model: 'opus',
     prompt: `Haz un review de seguridad de este proyecto. Busca: command injection, XSS, SQL injection, secrets hardcodeados, permisos excesivos, dependencias con vulnerabilidades conocidas. Solo arregla issues CRÍTICOS (no warnings menores). Trabaja en los archivos fuente, no en tests ni configs.`
   },
   'dep-update': {
     model: 'sonnet',
-    budgetUsd: 0.15,
     prompt: `Revisa las dependencias de este proyecto. Actualiza las que estén desactualizadas (minor/patch, no major). Si hay tests, ejecútalos después de actualizar para verificar que nada se rompe. Si un test falla, revierte esa actualización específica.`
   },
   'simplify': {
-    model: 'sonnet',
-    budgetUsd: 0.10,
+    model: 'opus',
     prompt: `Revisa el código de este proyecto buscando oportunidades de simplificación: código duplicado, funciones demasiado largas, complejidad innecesaria, imports no usados. Aplica solo simplificaciones seguras que no cambien el comportamiento. No toques tests.`
   },
   'add-tests': {
-    model: 'sonnet',
-    budgetUsd: 0.20,
+    model: 'opus',
     prompt: `Analiza este proyecto e identifica las funciones/módulos más críticos que no tienen tests. Añade tests para los 2-3 paths más importantes. Usa el framework de testing que ya use el proyecto (vitest, jest, pytest, etc). Si no hay framework, sugiere uno pero no lo instales. No modifiques código existente, solo añade tests nuevos.`
   },
   'git-cleanup': {
-    model: 'haiku',
-    budgetUsd: 0.10,
+    model: 'sonnet',
     prompt: `Limpia este repositorio git: elimina ramas locales ya mergeadas (excepto master/main), verifica que .gitignore cubre node_modules, dist, build, .env, *.log, y otros patrones comunes para el stack del proyecto. Solo modifica .gitignore si le faltan entradas importantes.`
   }
 };
+
+const WATCHDOG_MS = 5 * 60 * 1000; // 5 min hard kill
 
 function ensureRunsDir() {
   if (!fs.existsSync(RUNS_DIR)) fs.mkdirSync(RUNS_DIR, { recursive: true });
@@ -131,12 +128,6 @@ async function execute(task, onProgress) {
     return { status: 'failed', error: `Unknown skill: ${task.skill}`, costUsd: 0 };
   }
 
-  // Check budget
-  const remaining = store.budgetRemaining();
-  if (remaining < skill.budgetUsd) {
-    return { status: 'skipped', error: 'Budget exceeded', costUsd: 0 };
-  }
-
   ensureRunsDir();
   const logFile = path.join(RUNS_DIR, `${task.id}.log`);
   const logStream = fs.createWriteStream(logFile, { flags: 'a' });
@@ -159,17 +150,26 @@ async function execute(task, onProgress) {
       '--print',
       '-p', skill.prompt,
       '--model', skill.model,
-      '--max-budget-usd', String(skill.budgetUsd),
       '--output-format', 'text',
       '--dangerously-skip-permissions'
     ];
 
     const proc = spawn('claude', args, {
       cwd: task.projectPath,
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
-      timeout: 5 * 60 * 1000, // 5 min max per task
       env: { ...process.env }
     });
+
+    // Close stdin immediately — --print doesn't need input
+    proc.stdin.end();
+
+    // Manual watchdog: kill process after WATCHDOG_MS
+    const watchdog = setTimeout(() => {
+      logStream.write(`\n=== WATCHDOG: killing after ${WATCHDOG_MS / 1000}s ===\n`);
+      try { proc.kill('SIGTERM'); } catch {}
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5000);
+    }, WATCHDOG_MS);
 
     let output = '';
 
@@ -185,13 +185,13 @@ async function execute(task, onProgress) {
     });
 
     proc.on('close', async (code) => {
+      clearTimeout(watchdog);
       const duration = Math.round((Date.now() - startTime) / 1000);
       logStream.write(`\n=== Finished (code ${code}) in ${duration}s ===\n`);
       logStream.end();
 
-      // Estimate cost (rough: Haiku ~$0.001, Sonnet ~$0.01-0.05 per run)
-      const estimatedCost = skill.budgetUsd * 0.3; // conservative estimate: ~30% of budget
-      store.addSpend(estimatedCost);
+      // Track duration only — budget disabled for Max plan
+      const estimatedCost = 0;
 
       // Check if branch has actual changes
       const hasChanges = await branchHasCommits(task.projectPath, branch);
@@ -225,6 +225,7 @@ async function execute(task, onProgress) {
     });
 
     proc.on('error', async (err) => {
+      clearTimeout(watchdog);
       logStream.write(`\n=== ERROR: ${err.message} ===\n`);
       logStream.end();
 

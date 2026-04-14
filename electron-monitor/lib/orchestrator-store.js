@@ -23,12 +23,17 @@ const DEFAULTS = {
   todayDate: new Date().toISOString().slice(0, 10),
   lastFullScan: null,
   blacklist: ['substract'],
-  priorityRules: { high: 7, medium: 30 },
-  priorityOverrides: {},  // { projectName: 'high'|'medium'|'ignored' }
+  priorityRules: { high: 7, medium: 30, low: 90 },
+  priorityOverrides: {},  // { projectName: 'high'|'medium'|'low'|'ignored' }
   idleEnabled: true,
   idleMinutes: 15,
   capacityEnabled: true,
-  capacityThreshold: 50,  // execute if 5h usage < this %
+  capacityThreshold: 50,  // fallback when pacing disabled
+  pacingEnabled: true,
+  pacingMaxTarget: 95,    // max % to aim for in 5h cycle
+  pacingExponent: 0.6,    // curve shape: lower = more conservative early
+  sevenDayThrottle: 80,   // forced coast when 7d > this %
+  sevenDayCaution: 60,    // reduce maxTarget when 7d > this %
   projects: {},
   queue: []
 };
