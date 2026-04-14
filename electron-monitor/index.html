@@ -6,9 +6,9 @@
 * { margin:0; padding:0; box-sizing:border-box; }
 html, body { width:max-content; min-width:100%; }
 body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; user-select:none; -webkit-app-region:drag; }
-.bar { display:inline-flex; align-items:center; height:44px; padding:0 14px; gap:8px; width:max-content; }
+.bar { display:flex; align-items:center; height:44px; padding:0 14px; gap:8px; width:100%; }
 .logo { font-size:13px; font-weight:600; color:#7aa2f7; margin-right:8px; flex-shrink:0; }
-.chips { display:flex; align-items:center; gap:6px; scrollbar-width:none; }
+.chips { display:flex; align-items:center; gap:6px; scrollbar-width:none; overflow-x:auto; overflow-y:hidden; flex:1; min-width:0; }
 .chips::-webkit-scrollbar { display:none; }
 .chip { display:flex; flex-direction:column; justify-content:center; padding:3px 11px; border-radius:6px; cursor:pointer; white-space:nowrap; flex-shrink:0; -webkit-app-region:no-drag; border:1px solid transparent; }
 .chip:hover { filter:brightness(1.3); }
