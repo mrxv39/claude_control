@@ -100,6 +100,7 @@ const chips = document.getElementById('chips');
 const stats = document.getElementById('stats');
 
 const selected = new Set(); // hwnd values
+const gitCache = {}; // cwd -> { branch, dirty, recentCommits }
 
 function render(sessions) {
   chips.innerHTML = '';
@@ -150,22 +151,17 @@ function render(sessions) {
     d.title = `${s.project}\n${s.cwd || ''}\nEstado: ${s.status}\nContexto: ${ctx}%\nPID: ${s.pid}`;
     const run = s.running !== '-' ? ` <span class="run">[${s.running}]</span>` : '';
 
-    // Build main row
+    // Build main row with cached git badge
     const mainDiv = document.createElement('div');
     mainDiv.className = 'chip-main';
-    mainDiv.innerHTML = `<span class="dot"></span><span class="name">${s.project}</span>${run}`;
-    // Git badge (async, appended when ready)
-    if (s.cwd && s.cwd !== 'N/A') {
-      ipcRenderer.invoke('get-git-status', s.cwd).then(git => {
-        if (!git || !git.branch) return;
-        const badge = document.createElement('span');
-        badge.className = 'git-badge' + (git.dirty > 0 ? ' git-dirty' : '');
-        const shortBranch = git.branch.length > 16 ? git.branch.slice(0, 15) + '\u2026' : git.branch;
-        badge.textContent = shortBranch + (git.dirty > 0 ? ` +${git.dirty}` : '');
-        badge.title = git.branch + '\n' + git.recentCommits.join('\n');
-        mainDiv.appendChild(badge);
-      }).catch(() => {});
+    const cached = s.cwd ? gitCache[s.cwd] : null;
+    let gitHtml = '';
+    if (cached && cached.branch) {
+      const shortBranch = cached.branch.length > 16 ? cached.branch.slice(0, 15) + '\u2026' : cached.branch;
+      const cls = cached.dirty > 0 ? 'git-badge git-dirty' : 'git-badge';
+      gitHtml = `<span class="${cls}" title="${cached.branch}">${shortBranch}${cached.dirty > 0 ? ' +' + cached.dirty : ''}</span>`;
     }
+    mainDiv.innerHTML = `<span class="dot"></span><span class="name">${s.project}</span>${run}${gitHtml}`;
     d.appendChild(mainDiv);
 
     // Context usage bar (only for Claude sessions)
@@ -226,7 +222,18 @@ function render(sessions) {
   }, 100);
 }
 
-async function refresh() { render(await ipcRenderer.invoke('get-sessions')); }
+async function refresh() {
+  const sessions = await ipcRenderer.invoke('get-sessions');
+  // Update git cache in background (doesn't block render)
+  const cwds = new Set(sessions.filter(s => s.cwd && s.cwd !== 'N/A').map(s => s.cwd));
+  for (const cwd of cwds) {
+    if (!gitCache[cwd]) gitCache[cwd] = { branch: null, dirty: 0, recentCommits: [] };
+    ipcRenderer.invoke('get-git-status', cwd).then(git => {
+      if (git) gitCache[cwd] = git;
+    }).catch(() => {});
+  }
+  render(sessions);
+}
 refresh();
 setInterval(refresh, 3000);
 
