@@ -342,22 +342,119 @@ async function startScan() {
 
 async function renderQueue() {
   const queue = await ipcRenderer.invoke('get-queue');
-  if (!queue.length) {
-    panelContent.innerHTML = `<div class="empty-msg">No hay tareas en cola.<br><span style="font-size:11px;color:#565f89;">Las tareas se encolarán automáticamente según el análisis de salud.</span></div>`;
-    return;
-  }
+  const status = await ipcRenderer.invoke('get-scheduler-status');
+
   let html = '';
-  for (const task of queue) {
-    const statusClass = task.status === 'pending' ? 'queue-pending' :
-                        task.status === 'running' ? 'queue-running' :
-                        task.status === 'done' ? 'queue-done' : 'queue-failed';
-    html += `<div class="queue-item">`;
-    html += `<span class="queue-status ${statusClass}">${esc(task.status)}</span>`;
-    html += `<span class="queue-info">${esc(task.project || '?')} — ${esc(task.skill || '?')}</span>`;
-    if (task.costUsd) html += `<span class="queue-cost">$${task.costUsd.toFixed(3)}</span>`;
-    html += `</div>`;
+
+  // Scheduler controls bar
+  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">`;
+  const stateColor = status.paused ? '#f7768e' : status.outsideWorkHours ? '#9ece6a' : '#e0af68';
+  const stateLabel = status.paused ? 'PAUSADO' :
+                     status.running ? 'EJECUTANDO' :
+                     status.outsideWorkHours ? 'ACTIVO (fuera de horario)' : 'ESPERANDO (horario laboral)';
+  html += `<span style="font-size:11px;color:${stateColor};font-weight:600;">${stateLabel}</span>`;
+  html += `<span style="font-size:10px;color:#565f89;">Horario: ${status.workHours.start}:00-${status.workHours.end}:00</span>`;
+
+  if (status.paused) {
+    html += `<button class="scan-btn" id="resume-btn">Reanudar</button>`;
+  } else {
+    html += `<button class="scan-btn" id="pause-btn" style="border-color:rgba(247,118,142,.3);color:#f7768e;">Pausar</button>`;
   }
+  html += `<button class="scan-btn" id="add-task-btn">+ Tarea</button>`;
+  html += `</div>`;
+
+  // Config row
+  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">`;
+  html += `<label style="font-size:10px;color:#565f89;">Horario:</label>`;
+  html += `<input type="number" id="wh-start" value="${status.workHours.start}" min="0" max="23" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
+  html += `<span style="font-size:10px;color:#565f89;">a</span>`;
+  html += `<input type="number" id="wh-end" value="${status.workHours.end}" min="0" max="23" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
+  html += `<label style="font-size:10px;color:#565f89;margin-left:8px;">Budget/día: $</label>`;
+  html += `<input type="number" id="budget-input" value="${status.dailyBudget}" min="0" step="0.5" style="width:50px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
+  html += `<button class="scan-btn" id="save-config-btn" style="font-size:10px;padding:2px 8px;">Guardar</button>`;
+  html += `</div>`;
+
+  if (!queue.length) {
+    html += `<div class="empty-msg">No hay tareas en cola.<br><span style="font-size:11px;color:#565f89;">Se encolarán automáticamente fuera de horario según la salud de los proyectos.</span></div>`;
+  } else {
+    // Show tasks grouped: running first, then pending, then done/failed
+    const order = { running: 0, pending: 1, done: 2, failed: 3, skipped: 4 };
+    const sorted = [...queue].sort((a, b) => (order[a.status] || 5) - (order[b.status] || 5));
+
+    for (const task of sorted) {
+      const statusClass = task.status === 'pending' ? 'queue-pending' :
+                          task.status === 'running' ? 'queue-running' :
+                          task.status === 'done' ? 'queue-done' : 'queue-failed';
+      html += `<div class="queue-item">`;
+      html += `<span class="queue-status ${statusClass}">${esc(task.status)}</span>`;
+      html += `<span class="queue-info">${esc(task.project || '?')} — ${esc(task.skill || '?')}`;
+      if (task.branch) html += ` <span style="color:#7aa2f7;font-size:10px;">${esc(task.branch)}</span>`;
+      html += `</span>`;
+      if (task.costUsd) html += `<span class="queue-cost">$${task.costUsd.toFixed(3)}</span>`;
+      if (task.duration) html += `<span class="queue-cost">${task.duration}s</span>`;
+      if (task.status === 'pending') html += `<span class="queue-cost" style="color:#f7768e;cursor:pointer;" data-remove="${task.id}">✕</span>`;
+      html += `</div>`;
+    }
+  }
+
   panelContent.innerHTML = html;
+
+  // Wire up buttons
+  const pauseBtn = document.getElementById('pause-btn');
+  const resumeBtn = document.getElementById('resume-btn');
+  const addTaskBtn = document.getElementById('add-task-btn');
+  const saveConfigBtn = document.getElementById('save-config-btn');
+
+  if (pauseBtn) pauseBtn.addEventListener('click', async () => { await ipcRenderer.invoke('pause-scheduler'); renderQueue(); });
+  if (resumeBtn) resumeBtn.addEventListener('click', async () => { await ipcRenderer.invoke('resume-scheduler'); renderQueue(); });
+  if (saveConfigBtn) saveConfigBtn.addEventListener('click', async () => {
+    const start = parseInt(document.getElementById('wh-start').value) || 9;
+    const end = parseInt(document.getElementById('wh-end').value) || 23;
+    const budget = parseFloat(document.getElementById('budget-input').value) || 2;
+    await ipcRenderer.invoke('set-orchestrator-config', { workHours: { start, end }, dailyBudgetUsd: budget });
+    renderQueue();
+  });
+  if (addTaskBtn) addTaskBtn.addEventListener('click', () => showAddTaskDialog());
+
+  // Wire remove buttons
+  panelContent.querySelectorAll('[data-remove]').forEach(el => {
+    el.addEventListener('click', async () => {
+      await ipcRenderer.invoke('remove-from-queue', el.dataset.remove);
+      renderQueue();
+    });
+  });
+}
+
+async function showAddTaskDialog() {
+  const projects = await ipcRenderer.invoke('get-project-analysis');
+  const skills = await ipcRenderer.invoke('get-skills');
+  const entries = Object.entries(projects).sort((a, b) => a[0].localeCompare(b[0]));
+
+  let html = '<div style="background:#1e1e2e;border:1px solid #2a2b3d;border-radius:8px;padding:14px;margin-bottom:10px;">';
+  html += '<div style="font-size:12px;color:#c0caf5;font-weight:600;margin-bottom:8px;">Añadir tarea manual</div>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
+  html += '<select id="add-project" style="background:#181825;border:1px solid #2a2b3d;color:#c0caf5;border-radius:4px;padding:4px 8px;font-size:11px;">';
+  for (const [name] of entries) html += `<option value="${esc(name)}">${esc(name)}</option>`;
+  html += '</select>';
+  html += '<select id="add-skill" style="background:#181825;border:1px solid #2a2b3d;color:#c0caf5;border-radius:4px;padding:4px 8px;font-size:11px;">';
+  for (const s of skills) html += `<option value="${esc(s.name)}">${esc(s.name)} ($${s.budgetUsd})</option>`;
+  html += '</select>';
+  html += '<button class="scan-btn" id="confirm-add-btn">Encolar</button>';
+  html += '<button class="scan-btn" id="cancel-add-btn" style="color:#565f89;">Cancelar</button>';
+  html += '</div></div>';
+
+  panelContent.insertAdjacentHTML('afterbegin', html);
+
+  document.getElementById('confirm-add-btn').addEventListener('click', async () => {
+    const projName = document.getElementById('add-project').value;
+    const skill = document.getElementById('add-skill').value;
+    const proj = projects[projName];
+    if (proj && skill) {
+      await ipcRenderer.invoke('add-to-queue', { project: projName, skill, projectPath: proj.path });
+      renderQueue();
+    }
+  });
+  document.getElementById('cancel-add-btn').addEventListener('click', () => renderQueue());
 }
 
 async function renderLog() {
@@ -381,6 +478,11 @@ async function renderLog() {
 }
 
 function esc(str) { return String(str || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+
+// Live scheduler status updates
+ipcRenderer.on('scheduler-status', (ev, status) => {
+  if (currentTab === 'queue' && panel.classList.contains('open')) renderQueue();
+});
 
 // Show setup chip if hook is missing
 ipcRenderer.on('hook-missing', () => {

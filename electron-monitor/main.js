@@ -5,6 +5,8 @@ const fs = require('fs');
 const store = require('./lib/orchestrator-store');
 const scanner = require('./lib/project-scanner');
 const analyzer = require('./lib/project-analyzer');
+const scheduler = require('./lib/scheduler');
+const executor = require('./lib/executor');
 const koffi = require('koffi');
 
 // Win32
@@ -684,6 +686,22 @@ ipcMain.handle('get-budget-status', () => {
   };
 });
 
+// Scheduler/executor IPC
+ipcMain.handle('get-scheduler-status', () => scheduler.getStatus());
+ipcMain.handle('pause-scheduler', () => { scheduler.pause(); return true; });
+ipcMain.handle('resume-scheduler', () => { scheduler.resume(); return true; });
+ipcMain.handle('emergency-stop', () => { scheduler.pause(); return true; });
+
+ipcMain.handle('add-to-queue', (ev, task) => store.enqueue(task));
+ipcMain.handle('remove-from-queue', (ev, taskId) => { store.dequeue(taskId); return true; });
+ipcMain.handle('get-skills', () => {
+  return Object.entries(executor.SKILLS).map(([name, def]) => ({
+    name,
+    model: def.model,
+    budgetUsd: def.budgetUsd
+  }));
+});
+
 app.setAppUserModelId('com.claudio.monitor');
 
 // Single instance lock — if already running, focus the existing one
@@ -716,11 +734,31 @@ app.whenReady().then(() => {
         });
       }).catch(() => {});
     }
+    // Start the autonomous scheduler
+    scheduler.start({
+      getSessions: async () => {
+        try {
+          const r = execSync(
+            `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${resolveScript('get-sessions.ps1')}"`,
+            { encoding: 'utf-8', timeout: 15000 }
+          ).trim();
+          if (!r) return [];
+          const p = JSON.parse(r);
+          return Array.isArray(p) ? p : [p];
+        } catch { return []; }
+      },
+      onStatus: (status) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('scheduler-status', status);
+        }
+      }
+    });
   });
 });
 app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
 app.on('before-quit', () => {
   isQuitting = true;
+  scheduler.stop();
   // Stop the overlay loop BEFORE destroying windows to avoid accessing destroyed objects
   if (overlayPollTimer) { clearInterval(overlayPollTimer); overlayPollTimer = null; }
   // Destroy all overlays explicitly
