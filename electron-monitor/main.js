@@ -11,57 +11,15 @@ const tokenHistory = require('./lib/token-history');
 const gitStatus = require('./lib/git-status');
 const conversationReader = require('./lib/conversation-reader');
 const statsAggregator = require('./lib/stats-aggregator');
-const koffi = require('koffi');
+const win32 = require('./lib/win32');
+const overlayManager = require('./lib/overlay-manager');
+const notifications = require('./lib/notifications');
 
-// Win32
-const user32 = koffi.load('user32.dll');
-const FindWindowA = user32.func('intptr __stdcall FindWindowA(str cls, str title)');
-const GetForegroundWindow = user32.func('intptr __stdcall GetForegroundWindow()');
-const ShowWindow = user32.func('bool __stdcall ShowWindow(intptr h, int c)');
-const IsIconic = user32.func('bool __stdcall IsIconic(intptr h)');
-const IsWindow = user32.func('bool __stdcall IsWindow(intptr h)');
-const SetForegroundWindow = user32.func('bool __stdcall SetForegroundWindow(intptr h)');
-const MoveWindow = user32.func('bool __stdcall MoveWindow(intptr h, int x, int y, int w, int hh, bool repaint)');
-const RECT = koffi.struct('RECT', { left:'int32', top:'int32', right:'int32', bottom:'int32' });
-const GetWindowRect = user32.func('bool __stdcall GetWindowRect(intptr h, _Out_ RECT *r)');
-const IsWindowVisible = user32.func('bool __stdcall IsWindowVisible(intptr h)');
-const POINT = koffi.struct('POINT', { x:'int32', y:'int32' });
-const WindowFromPoint = user32.func('intptr __stdcall WindowFromPoint(POINT p)');
-const GetAncestor = user32.func('intptr __stdcall GetAncestor(intptr h, uint flags)');
-const keybd_event = user32.func('void __stdcall keybd_event(uint8 vk, uint8 scan, uint flags, uintptr extra)');
-const FindWindowExA = user32.func('intptr __stdcall FindWindowExA(intptr parent, intptr after, str cls, str title)');
-const GetWindowThreadProcessId = user32.func('uint __stdcall GetWindowThreadProcessId(intptr h, _Out_ uint32 *pid)');
-const GetWindowTextW = user32.func('int __stdcall GetWindowTextW(intptr h, uint16 *buf, int max)');
-const GetClassNameA = user32.func('int __stdcall GetClassNameA(intptr h, uint8 *buf, int max)');
-
-// Enumerate all WT windows, returns Map<wtPid, [{hwnd, title}]>
-function enumWtWindows() {
-  const map = new Map();
-  let h = 0;
-  while (true) {
-    h = FindWindowExA(0, h, 'CASCADIA_HOSTING_WINDOW_CLASS', null);
-    if (!h) break;
-    const pidBuf = [0];
-    GetWindowThreadProcessId(h, pidBuf);
-    const pid = pidBuf[0];
-    const titleBuf = new Uint16Array(512);
-    GetWindowTextW(h, titleBuf, 512);
-    // Decode UTF-16 title
-    let title = '';
-    for (let i = 0; i < titleBuf.length && titleBuf[i]; i++) title += String.fromCharCode(titleBuf[i]);
-    if (!map.has(pid)) map.set(pid, []);
-    map.get(pid).push({ hwnd: Number(h), title });
-  }
-  return map;
-}
-
-function focusWindow(hwnd) {
-  if (IsIconic(hwnd)) ShowWindow(hwnd, 9);
-  // Alt trick: simular Alt para desbloquear SetForegroundWindow
-  keybd_event(0x12, 0, 0, 0);
-  keybd_event(0x12, 0, 2, 0);
-  SetForegroundWindow(hwnd);
-}
+// Destructure win32 for direct use
+const {
+  FindWindowA, ShowWindow, IsIconic, IsWindow, MoveWindow,
+  GetWindowRect, IsWindowVisible, keybd_event, enumWtWindows, focusWindow
+} = win32;
 
 let mainWindow;
 let tray = null;
@@ -87,12 +45,10 @@ function createWindow() {
   mainWindow.loadFile('index.html');
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
 
-  // Minimize to tray instead of closing
   mainWindow.on('close', (e) => {
     if (!isQuitting) { e.preventDefault(); mainWindow.hide(); }
   });
 
-  // Detect user dragging the bar
   mainWindow.on('move', () => {
     if (isSettingBounds) return;
     const [x, y] = mainWindow.getPosition();
@@ -101,22 +57,20 @@ function createWindow() {
 }
 
 function createTray() {
-  // Generate a simple tray icon using nativeImage
   const { nativeImage } = require('electron');
   let icon;
   const customIcon = path.join(__dirname, 'icon.png');
   if (fs.existsSync(customIcon)) {
     icon = nativeImage.createFromPath(customIcon);
   } else {
-    // Create a 16x16 icon: green circle on transparent background
     const size = 16;
     const buf = Buffer.alloc(size * size * 4, 0);
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const dx = x - 7.5, dy = y - 7.5;
-        if (dx*dx + dy*dy <= 49) { // radius 7
+        if (dx*dx + dy*dy <= 49) {
           const i = (y * size + x) * 4;
-          buf[i] = 122; buf[i+1] = 162; buf[i+2] = 247; buf[i+3] = 255; // #7aa2f7
+          buf[i] = 122; buf[i+1] = 162; buf[i+2] = 247; buf[i+3] = 255;
         }
       }
     }
@@ -132,7 +86,7 @@ function createTray() {
   tray.setContextMenu(menu);
 }
 
-// IPC: hide bar (from ✕ button)
+// ---- IPC: bar management ----
 ipcMain.handle('hide-bar', () => { if (mainWindow) mainWindow.hide(); });
 
 ipcMain.handle('resize-bar', (event, w) => {
@@ -144,11 +98,9 @@ ipcMain.handle('resize-bar', (event, w) => {
 
   let x, y;
   if (userPosition) {
-    // Keep user-chosen position, clamp to screen bounds
     x = Math.max(wa.x, Math.min(userPosition.x, wa.x + wa.width - width));
     y = Math.max(wa.y, Math.min(userPosition.y, wa.y + wa.height - h));
   } else {
-    // Center horizontally at top
     x = Math.round((wa.width - width) / 2) + wa.x;
     y = wa.y;
   }
@@ -158,20 +110,9 @@ ipcMain.handle('resize-bar', (event, w) => {
   isSettingBounds = false;
 });
 
-// Get sessions
-ipcMain.handle('get-sessions', async () => {
-  try {
-    const r = execSync(
-      `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${path.join(__dirname, 'get-sessions.ps1')}"`,
-      { encoding: 'utf-8', timeout: 15000 }
-    ).trim();
-    if (!r) return [];
-    const p = JSON.parse(r);
-    return Array.isArray(p) ? p : [p];
-  } catch (e) { return []; }
-});
+// ---- IPC: window focus ----
+let lastFocusedViaChip = 0;
 
-// Focus a session: prefer HWND from hook state file; fallback to first WT window + Ctrl+Alt+N
 ipcMain.handle('focus-wt', async (event, payload) => {
   try {
     let targetHwnd = 0;
@@ -185,7 +126,7 @@ ipcMain.handle('focus-wt', async (event, payload) => {
 
     if (targetHwnd && IsWindow(targetHwnd)) {
       if (lastFocusedViaChip === targetHwnd && !IsIconic(targetHwnd)) {
-        ShowWindow(targetHwnd, 6); // SW_MINIMIZE
+        ShowWindow(targetHwnd, 6);
         lastFocusedViaChip = 0;
         return 'MINIMIZED';
       }
@@ -197,7 +138,7 @@ ipcMain.handle('focus-wt', async (event, payload) => {
     const hwnd = FindWindowA('CASCADIA_HOSTING_WINDOW_CLASS', null);
     if (!hwnd) return 'NO_WINDOW';
     if (lastFocusedViaChip === Number(hwnd) && !IsIconic(hwnd)) {
-      ShowWindow(hwnd, 6); // SW_MINIMIZE
+      ShowWindow(hwnd, 6);
       lastFocusedViaChip = 0;
       return 'MINIMIZED';
     }
@@ -220,7 +161,7 @@ ipcMain.handle('focus-wt', async (event, payload) => {
   } catch (e) { return 'ERROR'; }
 });
 
-// Tile a set of HWNDs across the primary work area (below the always-on-top bar)
+// ---- IPC: tile windows ----
 ipcMain.handle('tile-windows', async (event, hwnds) => {
   try {
     if (!Array.isArray(hwnds)) return 'BAD_INPUT';
@@ -249,122 +190,21 @@ ipcMain.handle('tile-windows', async (event, hwnds) => {
     valid.forEach((h, i) => {
       const c = i % cols;
       const r = Math.floor(i / cols);
-      if (IsIconic(h)) ShowWindow(h, 9);
-      else ShowWindow(h, 9); // SW_RESTORE: unmaximize if needed
+      ShowWindow(h, 9); // SW_RESTORE
       MoveWindow(h, x0 + c * cellW, y0 + r * cellH, cellW, cellH, true);
     });
 
-    // Bring them all to front in order, last one ends up focused
     valid.forEach(h => focusWindow(h));
     return 'OK';
   } catch (e) { return 'ERROR:' + e.message; }
 });
 
-// ---- Title overlays: small frameless windows pinned to each WT window ----
-const overlays = new Map(); // hwnd -> { win, label, status, occludedCount }
-const OVERLAY_H = 33;
-const OVERLAY_BTN_MARGIN = 140; // space for WT minimize/maximize/close buttons
-
-function overlayHtml(label, status) {
-  const safe = String(label).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
-  const bg = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
-  const border = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
-  const textColor = status === 'BUSY' ? '#1a2e0a' : '#3a0a12';
-  return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
-<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:'Segoe UI',sans-serif;">
-<div style="background:${bg};border:1px solid ${border};border-top:none;color:${textColor};font-size:16px;font-weight:700;padding:5px 15px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe}</div>
-</body></html>`);
-}
-
-function createOverlay(hwnd, label, status) {
-  const win = new BrowserWindow({
-    width: 400, height: OVERLAY_H,
-    x: -9999, y: -9999,
-    frame: false, transparent: true, alwaysOnTop: true,
-    skipTaskbar: true, focusable: false, resizable: false,
-    hasShadow: false, show: false,
-    webPreferences: { nodeIntegration: false, contextIsolation: true }
-  });
-  win.setIgnoreMouseEvents(true);
-  win.loadURL(overlayHtml(label, status));
-  win.setAlwaysOnTop(true, 'screen-saver');
-  win._ready = false;
-  win.once('ready-to-show', () => { win._ready = true; win.showInactive(); });
-  return win;
-}
-
-function syncOverlays(sessions) {
-  const live = new Map();
-  for (const s of sessions) {
-    if (s.hwnd && IsWindow(s.hwnd)) live.set(Number(s.hwnd), { label: s.project || '?', status: s.status || 'IDLE' });
-  }
-  // Remove dead overlays
-  for (const [h, info] of overlays) {
-    if (!live.has(h)) { try { info.win.destroy(); } catch {} overlays.delete(h); }
-  }
-  // Create or update
-  for (const [h, data] of live) {
-    let info = overlays.get(h);
-    if (!info) {
-      const win = createOverlay(h, data.label, data.status);
-      info = { win, label: data.label, status: data.status, offscreen: true };
-      overlays.set(h, info);
-    } else if (info.label !== data.label || info.status !== data.status) {
-      info.win.loadURL(overlayHtml(data.label, data.status));
-      info.label = data.label;
-      info.status = data.status;
-    }
-  }
-}
-
-function repositionOverlays() {
-  if (isQuitting) return;
-  for (const [h, info] of overlays) {
-    if (!info.win || info.win.isDestroyed()) { overlays.delete(h); continue; }
-    if (!info.win._ready) continue; // wait for HTML to render
-    try {
-      if (!IsWindow(h) || !IsWindowVisible(h) || IsIconic(h)) {
-        if (!info.offscreen) { info.win.hide(); info.offscreen = true; }
-        continue;
-      }
-      const r = {};
-      if (!GetWindowRect(h, r)) continue;
-      const wWidth = r.right - r.left;
-      const wHeight = r.bottom - r.top;
-      // Occlusion: probe center of WT window (avoids hitting bar/overlays at top)
-      const probeX = r.left + Math.floor(wWidth / 2);
-      const probeY = r.top + Math.floor(wHeight / 2);
-      let occluded = false;
-      try {
-        const hit = WindowFromPoint({ x: probeX, y: probeY });
-        if (hit) {
-          const root = GetAncestor(hit, 2) || hit;
-          if (Number(root) !== Number(h)) occluded = true;
-        } else {
-          occluded = true;
-        }
-      } catch {}
-      if (occluded) {
-        if (!info.offscreen) { info.win.hide(); info.offscreen = true; }
-        continue;
-      }
-      const overlayW = Math.max(100, wWidth - OVERLAY_BTN_MARGIN);
-      info.win.setBounds({ x: r.left, y: r.top + 4, width: overlayW, height: OVERLAY_H });
-      if (info.offscreen) { info.win.showInactive(); info.offscreen = false; }
-    } catch {
-      overlays.delete(h);
-    }
-  }
-}
-
-// ---- Auto-tile: reposition WT windows when the set of sessions changes ----
-let prevAutoTileHwnds = []; // sorted array of hwnds from last auto-tile
+// ---- Auto-tile ----
+let prevAutoTileHwnds = [];
 
 function autoTile(hwnds) {
   const valid = hwnds.filter(h => h && IsWindow(h));
-  // Sort for stable comparison
   const sorted = [...valid].sort((a, b) => a - b);
-  // Only re-tile when the set of windows actually changes
   if (sorted.length === prevAutoTileHwnds.length &&
       sorted.every((h, i) => h === prevAutoTileHwnds[i])) return;
   prevAutoTileHwnds = sorted;
@@ -381,7 +221,7 @@ function autoTile(hwnds) {
 
   const n = sorted.length;
   let cols, rows;
-  if (n === 1)      { cols = 2; rows = 1; } // 1 window = 50% width (left half)
+  if (n === 1)      { cols = 2; rows = 1; }
   else if (n === 2) { cols = 2; rows = 1; }
   else if (n === 3) { cols = 3; rows = 1; }
   else if (n === 4) { cols = 2; rows = 2; }
@@ -393,204 +233,74 @@ function autoTile(hwnds) {
   sorted.forEach((h, i) => {
     const c = i % cols;
     const r = Math.floor(i / cols);
-    ShowWindow(h, 9); // SW_RESTORE: unmaximize if needed
+    ShowWindow(h, 9);
     MoveWindow(h, x0 + c * cellW, y0 + r * cellH, cellW, cellH, true);
   });
 }
 
-// Track the last HWND focused via chip click (for toggle minimize)
-let lastFocusedViaChip = 0;
-
-let overlayPollTimer = null;
-function startOverlayLoop() {
-  if (overlayPollTimer) return;
-  overlayPollTimer = setInterval(repositionOverlays, 33);
+// ---- Get sessions (with HWND resolution + overlays + auto-tile) ----
+function getSessions() {
+  const r = execSync(
+    `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${resolveScript('get-sessions.ps1')}"`,
+    { encoding: 'utf-8', timeout: 15000 }
+  ).trim();
+  if (!r) return [];
+  const p = JSON.parse(r);
+  return Array.isArray(p) ? p : [p];
 }
 
-// ---- Status change notifications (custom toast window) ----
-const prevStatus = new Map(); // cwd -> status
-const waitingSince = new Map(); // cwd -> 'BUSY' if WAITING streak started from BUSY
-const waitingCount = new Map(); // cwd -> consecutive WAITING polls (debounce)
+function resolveHwnds(arr) {
+  const needHwnd = arr.filter(s => !s.hwnd);
+  if (needHwnd.length === 0) return;
 
-function showToast(message) {
-  const { screen } = require('electron');
-  const wa = screen.getPrimaryDisplay().workArea;
-  const W = 320, H = 60;
-  const toast = new BrowserWindow({
-    width: W, height: H,
-    x: wa.x + wa.width - W - 16,
-    y: wa.y + wa.height - H - 16,
-    frame: false, transparent: true, alwaysOnTop: true,
-    skipTaskbar: true, focusable: false, resizable: false,
-    hasShadow: false,
-    webPreferences: { nodeIntegration: false, contextIsolation: true }
-  });
-  toast.setIgnoreMouseEvents(true);
-  const safe = String(message).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
-  toast.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`
-<!DOCTYPE html><html><body style="margin:0;font-family:'Segoe UI',sans-serif;">
-<div style="background:#1a1b26;border:1px solid #7aa2f7;border-radius:10px;padding:12px 18px;color:#c0caf5;font-size:13px;display:flex;align-items:center;gap:10px;height:100%;box-sizing:border-box;">
-<span style="font-size:20px;">&#9989;</span>
-<span>${safe}</span>
-</div></body></html>`));
-  toast.setAlwaysOnTop(true, 'screen-saver');
-  toast.showInactive();
-  // Play 7-Eleven chime
-  playChime();
-  setTimeout(() => { try { toast.destroy(); } catch {} }, 5000);
-}
+  const wtWindows = enumWtWindows();
+  const knownHwnds = new Set(arr.filter(s => s.hwnd).map(s => Number(s.hwnd)));
+  const unassigned = [];
+  for (const [, wins] of wtWindows) {
+    for (const w of wins) {
+      if (!knownHwnds.has(w.hwnd)) unassigned.push(w);
+    }
+  }
 
-function checkStatusChanges(sessions) {
-  for (const s of sessions) {
-    if (!s.isClaude || !s.cwd) continue;
-    const prev = prevStatus.get(s.cwd);
-    prevStatus.set(s.cwd, s.status);
-    if (s.status === 'WAITING') {
-      const count = (waitingCount.get(s.cwd) || 0) + 1;
-      waitingCount.set(s.cwd, count);
-      // Remember if this WAITING streak started from BUSY
-      if (count === 1) waitingSince.set(s.cwd, prev);
-      // Require 3 consecutive WAITING polls (~9s) before notifying,
-      // to avoid false alerts from brief pauses between tool calls.
-      if (waitingSince.get(s.cwd) === 'BUSY' && count === 3) {
-        showToast(`${s.project} termino — esperando tu input`);
+  // Match by title containing project name or cwd leaf
+  for (const s of needHwnd) {
+    const proj = (s.project || '').toLowerCase();
+    const cwdLeaf = s.cwd ? s.cwd.split('\\').pop().toLowerCase() : '';
+    for (let i = 0; i < unassigned.length; i++) {
+      const title = unassigned[i].title.toLowerCase();
+      if ((proj && proj !== '?' && title.includes(proj)) ||
+          (cwdLeaf && title.includes(cwdLeaf))) {
+        s.hwnd = unassigned[i].hwnd;
+        unassigned.splice(i, 1);
+        break;
       }
-    } else {
-      waitingCount.set(s.cwd, 0);
-      waitingSince.delete(s.cwd);
+    }
+  }
+
+  // Fallback: assign by screen position (left-to-right)
+  const stillNeed = needHwnd.filter(s => !s.hwnd);
+  if (stillNeed.length > 0 && unassigned.length > 0) {
+    unassigned.sort((a, b) => {
+      const ra = {}, rb = {};
+      GetWindowRect(a.hwnd, ra); GetWindowRect(b.hwnd, rb);
+      return (ra.left || 0) - (rb.left || 0);
+    });
+    for (let i = 0; i < Math.min(stillNeed.length, unassigned.length); i++) {
+      stillNeed[i].hwnd = unassigned[i].hwnd;
     }
   }
 }
 
-// ---- 7-Eleven chime generator ----
-function generateChimeWav() {
-  const sampleRate = 22050;
-  const tone1Freq = 1319; // E6
-  const tone2Freq = 988;  // B5
-  const tone1Dur = 0.35;
-  const tone2Dur = 0.45;
-  const pause = 0.08;
-  const volume = 0.4;
-
-  const totalSamples = Math.floor((tone1Dur + pause + tone2Dur) * sampleRate);
-  const data = Buffer.alloc(totalSamples * 2); // 16-bit mono
-
-  for (let i = 0; i < totalSamples; i++) {
-    const t = i / sampleRate;
-    let sample = 0;
-    if (t < tone1Dur) {
-      const env = Math.min(1, t / 0.01) * Math.min(1, (tone1Dur - t) / 0.05);
-      sample = Math.sin(2 * Math.PI * tone1Freq * t) * env * volume;
-    } else if (t > tone1Dur + pause) {
-      const t2 = t - tone1Dur - pause;
-      const env = Math.min(1, t2 / 0.01) * Math.min(1, (tone2Dur - t2) / 0.08);
-      sample = Math.sin(2 * Math.PI * tone2Freq * t2) * env * volume;
-    }
-    data.writeInt16LE(Math.round(sample * 32767), i * 2);
-  }
-
-  // WAV header
-  const header = Buffer.alloc(44);
-  header.write('RIFF', 0);
-  header.writeUInt32LE(36 + data.length, 4);
-  header.write('WAVE', 8);
-  header.write('fmt ', 12);
-  header.writeUInt32LE(16, 16);       // chunk size
-  header.writeUInt16LE(1, 20);        // PCM
-  header.writeUInt16LE(1, 22);        // mono
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * 2, 28); // byte rate
-  header.writeUInt16LE(2, 32);        // block align
-  header.writeUInt16LE(16, 34);       // bits per sample
-  header.write('data', 36);
-  header.writeUInt32LE(data.length, 40);
-
-  return Buffer.concat([header, data]);
-}
-
-let chimePath = null;
-function playChime() {
-  try {
-    if (!chimePath) {
-      const tmpDir = path.join(process.env.USERPROFILE, '.claude', 'claudio-state');
-      chimePath = path.join(tmpDir, 'chime.wav');
-      if (!fs.existsSync(chimePath)) {
-        fs.writeFileSync(chimePath, generateChimeWav());
-      }
-    }
-    // Use execFile with array args to avoid command injection if USERPROFILE contains special chars
-    require('child_process').execFileSync('powershell.exe',
-      ['-NoProfile', '-Command', `(New-Object Media.SoundPlayer '${chimePath.replace(/'/g, "''")}').PlaySync()`],
-      { timeout: 5000 });
-  } catch {}
-}
-
-// Resolve script paths: packaged app puts them in resources/, dev uses __dirname
-function resolveScript(name) {
-  const dev = path.join(__dirname, name);
-  if (require('fs').existsSync(dev)) return dev;
-  return path.join(process.resourcesPath, name);
-}
-
-// Sync overlays whenever renderer fetches sessions
-const _origGetSessions = ipcMain._invokeHandlers && ipcMain._invokeHandlers.get('get-sessions');
-ipcMain.removeHandler('get-sessions');
 ipcMain.handle('get-sessions', async () => {
   try {
-    const r = execSync(
-      `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${resolveScript('get-sessions.ps1')}"`,
-      { encoding: 'utf-8', timeout: 15000 }
-    ).trim();
-    if (!r) { syncOverlays([]); return []; }
-    const p = JSON.parse(r);
-    const arr = Array.isArray(p) ? p : [p];
+    const arr = getSessions();
+    if (arr.length === 0) { overlayManager.syncOverlays([]); return []; }
 
-    // Fill in missing HWNDs using WT window enumeration from Electron context
-    const needHwnd = arr.filter(s => !s.hwnd);
-    if (needHwnd.length > 0) {
-      const wtWindows = enumWtWindows();
-      // Collect all known HWNDs (from hook)
-      const knownHwnds = new Set(arr.filter(s => s.hwnd).map(s => Number(s.hwnd)));
-      // Find unassigned WT windows
-      const unassigned = [];
-      for (const [, wins] of wtWindows) {
-        for (const w of wins) {
-          if (!knownHwnds.has(w.hwnd)) unassigned.push(w);
-        }
-      }
-      // Try to match unassigned windows to sessions by title containing project name or cwd
-      for (const s of needHwnd) {
-        const proj = (s.project || '').toLowerCase();
-        const cwdLeaf = s.cwd ? s.cwd.split('\\').pop().toLowerCase() : '';
-        for (let i = 0; i < unassigned.length; i++) {
-          const title = unassigned[i].title.toLowerCase();
-          if ((proj && proj !== '?' && title.includes(proj)) ||
-              (cwdLeaf && title.includes(cwdLeaf))) {
-            s.hwnd = unassigned[i].hwnd;
-            unassigned.splice(i, 1);
-            break;
-          }
-        }
-      }
-      // Fallback: assign remaining unassigned windows to remaining sessions by screen position
-      const stillNeed = needHwnd.filter(s => !s.hwnd);
-      if (stillNeed.length > 0 && unassigned.length > 0) {
-        // Sort unassigned windows left-to-right by x position
-        unassigned.sort((a, b) => {
-          const ra = {}, rb = {};
-          GetWindowRect(a.hwnd, ra); GetWindowRect(b.hwnd, rb);
-          return (ra.left || 0) - (rb.left || 0);
-        });
-        for (let i = 0; i < Math.min(stillNeed.length, unassigned.length); i++) {
-          stillNeed[i].hwnd = unassigned[i].hwnd;
-        }
-      }
-    }
+    resolveHwnds(arr);
+    overlayManager.syncOverlays(arr);
+    notifications.checkStatusChanges(arr);
 
-    syncOverlays(arr);
-    checkStatusChanges(arr);
-
-    // Auto-tile: use all visible WT windows (not just session-assigned HWNDs)
+    // Auto-tile using all visible WT windows
     const wtWindows2 = enumWtWindows();
     const allWtHwnds = [];
     for (const [, wins] of wtWindows2) {
@@ -623,13 +333,20 @@ async function checkForUpdates() {
   } catch {}
 }
 
-// ---- Auto-setup statusLine for rate limit tracking ----
+// ---- Resolve script paths ----
+function resolveScript(name) {
+  const dev = path.join(__dirname, name);
+  if (fs.existsSync(dev)) return dev;
+  return path.join(process.resourcesPath, name);
+}
+
+// ---- Auto-setup statusLine ----
 function setupStatusLine() {
   try {
     const settingsPath = path.join(process.env.USERPROFILE, '.claude', 'settings.json');
     if (!fs.existsSync(settingsPath)) return;
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    if (settings.statusLine && settings.statusLine.includes('statusline-writer') && !settings.statusLine.includes('\\\\\\\\')) return; // already set correctly
+    if (settings.statusLine && settings.statusLine.includes('statusline-writer') && !settings.statusLine.includes('\\\\\\\\')) return;
     const scriptPath = resolveScript('lib/statusline-writer.js');
     settings.statusLine = `node "${scriptPath}"`;
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
@@ -670,12 +387,10 @@ ipcMain.handle('toggle-panel', () => {
   const wa = screen.getPrimaryDisplay().workArea;
 
   if (panelOpen) {
-    // Save bar position before opening panel
     const [bx, by] = mainWindow.getPosition();
     const [bw] = mainWindow.getSize();
     barBoundsBeforePanel = { x: bx, y: by, width: bw };
 
-    // Take most of the screen, centered
     const panelW = Math.min(Math.max(900, Math.round(wa.width * 0.7)), wa.width);
     const panelH = Math.min(Math.round(wa.height * 0.75), wa.height);
     const panelX = wa.x + Math.round((wa.width - panelW) / 2);
@@ -686,7 +401,6 @@ ipcMain.handle('toggle-panel', () => {
     mainWindow.setResizable(false);
     mainWindow.focus();
   } else {
-    // Restore bar to its original position
     const b = barBoundsBeforePanel || { x: wa.x, y: wa.y, width: 600 };
     mainWindow.setResizable(true);
     mainWindow.setBounds({ x: b.x, y: b.y, width: b.width, height: BAR_H });
@@ -722,7 +436,6 @@ ipcMain.handle('get-budget-status', () => {
   };
 });
 
-// Scheduler/executor IPC
 ipcMain.handle('get-scheduler-status', () => scheduler.getStatus());
 ipcMain.handle('pause-scheduler', () => { scheduler.pause(); return true; });
 ipcMain.handle('resume-scheduler', () => { scheduler.resume(); return true; });
@@ -775,9 +488,9 @@ ipcMain.handle('get-session-log', (ev, cwd) => {
   catch { return []; }
 });
 
+// ---- App lifecycle ----
 app.setAppUserModelId('com.claudio.monitor');
 
-// Single instance lock — if already running, focus the existing one
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -790,13 +503,12 @@ app.on('second-instance', () => {
 app.whenReady().then(() => {
   createWindow();
   createTray();
-  startOverlayLoop();
-  // Check hook setup and updates after window loads
+  overlayManager.startLoop();
   mainWindow.webContents.on('did-finish-load', () => {
     checkHookSetup();
     setupStatusLine();
     checkForUpdates();
-    setInterval(checkForUpdates, 6 * 60 * 60 * 1000); // every 6h
+    setInterval(checkForUpdates, 6 * 60 * 60 * 1000);
     // Auto-scan projects if last scan > 24h ago
     const config = store.load();
     const lastScan = config.lastFullScan ? new Date(config.lastFullScan).getTime() : 0;
@@ -811,15 +523,8 @@ app.whenReady().then(() => {
     // Start the autonomous scheduler
     scheduler.start({
       getSessions: async () => {
-        try {
-          const r = execSync(
-            `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${resolveScript('get-sessions.ps1')}"`,
-            { encoding: 'utf-8', timeout: 15000 }
-          ).trim();
-          if (!r) return [];
-          const p = JSON.parse(r);
-          return Array.isArray(p) ? p : [p];
-        } catch { return []; }
+        try { return getSessions(); }
+        catch { return []; }
       },
       onStatus: (status) => {
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -832,12 +537,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
 app.on('before-quit', () => {
   isQuitting = true;
+  overlayManager.setQuitting(true);
   scheduler.stop();
-  // Stop the overlay loop BEFORE destroying windows to avoid accessing destroyed objects
-  if (overlayPollTimer) { clearInterval(overlayPollTimer); overlayPollTimer = null; }
-  // Destroy all overlays explicitly
-  for (const [, info] of overlays) {
-    try { if (info.win && !info.win.isDestroyed()) info.win.destroy(); } catch {}
-  }
-  overlays.clear();
+  overlayManager.stopLoop();
+  overlayManager.destroyAll();
 });
