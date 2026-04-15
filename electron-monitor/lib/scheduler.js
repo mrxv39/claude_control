@@ -16,6 +16,7 @@ const executor = require('./executor');
 const tokenMonitor = require('./token-monitor');
 const tokenHistory = require('./token-history');
 const analyzer = require('./project-analyzer');
+const skillAnalyzer = require('./skill-analyzer');
 
 let timer = null;
 let running = false;
@@ -29,11 +30,13 @@ let lastTickDebug = null;
 const STUCK_TIMEOUT = 6 * 60 * 1000; // 6 min — if task runs longer, force reset
 
 // Priority order for auto-enqueue
+// Community skills (webapp-testing, frontend-design, trailofbits-security, pdf, ccusage)
+// are filtered by applicableSkills analysis — safe to include here
 const SCORE_SKILLS = [
-  { maxScore: 3, skills: ['security-review', 'supabase-audit', 'audit-claude-md'] },
-  { maxScore: 5, skills: ['audit-claude-md', 'dep-update', 'perf-audit'] },
-  { maxScore: 7, skills: ['add-tests', 'ui-polish', 'perf-audit', 'fix-types'] },
-  { maxScore: 10, skills: ['git-cleanup', 'simplify', 'fix-types'] },
+  { maxScore: 3, skills: ['security-review', 'supabase-audit', 'audit-claude-md', 'trailofbits-security'] },
+  { maxScore: 5, skills: ['audit-claude-md', 'dep-update', 'perf-audit', 'add-tests'] },
+  { maxScore: 7, skills: ['add-tests', 'ui-polish', 'perf-audit', 'fix-types', 'webapp-testing', 'frontend-design'] },
+  { maxScore: 10, skills: ['git-cleanup', 'simplify', 'fix-types', 'pdf', 'ccusage'] },
 ];
 
 function isOutsideWorkHours() {
@@ -132,6 +135,7 @@ function autoEnqueue(burstMode = false) {
   const recentLog = store.readLog(100);
 
   // Build ordered skill list per project: primary skills (matching score) first, then rest
+  // Filters out inapplicable skills if applicableSkills analysis exists
   function getSkillsForProject(proj) {
     const score = proj.score || 5;
     // Find primary skills (first matching rule), then collect rest as secondary
@@ -149,7 +153,15 @@ function autoEnqueue(burstMode = false) {
         if (!seen.has(s)) { secondary.push(s); seen.add(s); }
       }
     }
-    return [...primary, ...secondary];
+    let allSkills = [...primary, ...secondary];
+
+    // Filter by applicability analysis if available
+    const applicable = proj.applicableSkills && proj.applicableSkills.skills;
+    if (applicable) {
+      allSkills = allSkills.filter(s => applicable[s] !== false);
+    }
+
+    return allSkills;
   }
 
   // Helper: check if a project has any available (not recently ran) skill
@@ -194,6 +206,45 @@ function autoEnqueue(burstMode = false) {
   }
 
   return enqueued;
+}
+
+/**
+ * Run skill applicability analysis on one project per call.
+ * Only for medium/high priority projects without recent analysis.
+ * Uses heuristic (free) by default, Claude mode in pace/coast.
+ */
+async function maybeRunSkillAnalysis(pacingAction) {
+  const config = store.load();
+  const projects = config.projects;
+  if (!projects) return;
+
+  const STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  const useClaude = (pacingAction === 'pace' || pacingAction === 'coast');
+
+  for (const [name, proj] of Object.entries(projects)) {
+    const priority = getProjectPriority(name, proj, config);
+    if (priority === 'ignored' || priority === 'low') continue;
+
+    const analysis = proj.applicableSkills;
+    if (analysis && analysis.analyzedAt) {
+      const age = Date.now() - new Date(analysis.analyzedAt).getTime();
+      if (age < STALE_MS) {
+        // Skip if no new commits since analysis
+        if (!proj.lastModified || new Date(proj.lastModified) < new Date(analysis.analyzedAt)) continue;
+      }
+    }
+
+    // Analyze this one project, then return (one per tick)
+    try {
+      const result = await skillAnalyzer.analyzeSkills(
+        { name, path: proj.path, stack: proj.stack },
+        { useClaude }
+      );
+      store.setProject(name, { ...proj, applicableSkills: result });
+      notifyStatus('analysis', `Skill analysis: ${name} (${result.method})`);
+    } catch {}
+    return; // only one per tick
+  }
 }
 
 /**
@@ -307,6 +358,11 @@ async function tick() {
     return;
   }
 
+
+  // Run skill analysis on one project per tick (non-blocking, only pace/coast uses Claude)
+  if (pacingAction !== 'burst') {
+    await maybeRunSkillAnalysis(pacingAction);
+  }
 
   // Parallel execution: run up to MAX_PARALLEL tasks on different projects
   const isBurst = pacingAction === 'burst' || pacingAction === 'accelerate';

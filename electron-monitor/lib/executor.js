@@ -84,6 +84,80 @@ Solo modifica tipos/hints, no cambies lógica ni comportamiento. Prioriza archiv
 2. **Accesibilidad**: elementos interactivos sin keyboard access, divs/spans que deberían ser button/nav/main, aria-labels faltantes en botones de solo icono, contraste de color insuficiente.
 3. **Animaciones**: propiedades caras (width/height/top/left) → transform/opacity, transiciones faltantes en cambios de estado, añadir prefers-reduced-motion donde haya animaciones.
 Solo aplica cambios que mejoren sin cambiar funcionalidad. No toques lógica de negocio ni backend. Prioriza: estados interactivos > accesibilidad > consistencia visual > animaciones.`
+  },
+
+  // --- Community skills ---
+
+  'webapp-testing': {
+    model: 'sonnet',
+    prompt: `Analiza este proyecto web y crea tests E2E con Playwright.
+
+**Paso 1 — Setup**: Si no hay Playwright configurado, instálalo (npm i -D @playwright/test) y crea playwright.config.ts con baseURL apuntando al dev server del proyecto.
+
+**Paso 2 — Tests**: Crea tests para los 3-5 flujos más importantes:
+- Navegación principal (home, rutas principales)
+- Formularios críticos (login, registro, crear/editar entidades)
+- Acciones destructivas (eliminar, logout)
+Cada test: navegar, interactuar, verificar resultado visible.
+
+**Paso 3 — Verificar**: Ejecuta los tests. Si el dev server no está corriendo, usa webServer config en playwright.config.ts para arrancarlo automáticamente. Si fallan, arregla los tests.
+
+No modifiques código de la app, solo crea tests.`
+  },
+  'frontend-design': {
+    model: 'sonnet',
+    prompt: `Revisa el diseño visual de la UI de este proyecto. Identifica los 3 problemas de diseño más impactantes y arréglalos directamente.
+
+Busca:
+- **Tipografía**: jerarquía débil, tamaños inconsistentes, line-height apretado
+- **Espaciado**: márgenes/padding inconsistentes, elementos apretados, falta de breathing room
+- **Color**: paleta incoherente, contraste pobre, estados interactivos sin diferenciación visual
+- **Layout**: elementos desalineados, anchos inconsistentes, responsive roto
+- **Componentes**: botones sin jerarquía visual (primario/secundario/ghost), inputs sin focus ring
+
+Aplica los 3 cambios más impactantes. Usa CSS variables si el proyecto las usa. No cambies lógica ni funcionalidad.`
+  },
+  'trailofbits-security': {
+    model: 'opus',
+    prompt: `Haz una auditoría de seguridad profunda estilo Trail of Bits en este proyecto.
+
+Revisa estos vectores:
+1. **Crypto**: uso de algoritmos débiles (MD5, SHA1 para passwords), IVs estáticos, secrets en código
+2. **Auth**: bypass de autenticación, tokens sin expiración, sesiones sin invalidación
+3. **Inyección**: SQL injection, command injection, path traversal, template injection
+4. **Autorización**: IDOR (acceso a recursos de otros usuarios), falta de verificación de ownership
+5. **Supply chain**: dependencias con CVEs conocidas, lockfile manipulation, scripts postinstall sospechosos
+6. **Secrets**: API keys, tokens, passwords hardcodeados en código o configs versionados
+
+Crea SECURITY-AUDIT.md con hallazgos por severidad (CRITICAL/HIGH/MEDIUM/LOW).
+Arregla directamente solo los CRITICAL. Para el resto, documenta la solución sugerida.`
+  },
+  'pdf': {
+    model: 'sonnet',
+    prompt: `Revisa el manejo de PDFs en este proyecto.
+
+Busca:
+1. **Generación**: PDFs generados sin sanitizar input (XSS en HTML-to-PDF), sin limitar tamaño
+2. **Upload**: PDFs subidos sin validación de tipo real (magic bytes), sin límite de tamaño, sin scan de contenido malicioso
+3. **Procesamiento**: memory leaks al procesar PDFs grandes, falta de timeout en operaciones de parsing
+4. **Accesibilidad**: PDFs generados sin tags de accesibilidad, sin lang attribute, sin bookmarks
+
+Si no hay manejo de PDFs en el proyecto, repórtalo y no hagas cambios.
+Crea PDF-AUDIT.md con hallazgos. Arregla directamente los issues de seguridad.`
+  },
+  'ccusage': {
+    model: 'sonnet',
+    prompt: `Revisa el uso de la API de Claude / Anthropic SDK en este proyecto.
+
+Busca:
+1. **Prompt caching**: llamadas repetidas sin cache_control, system prompts largos sin cachear
+2. **Tokens**: prompts excesivamente largos, falta de max_tokens, modelos más caros de lo necesario
+3. **Errores**: falta de retry con backoff en rate limits (429), sin manejo de errores de API
+4. **Secrets**: API keys hardcodeadas en código (deben estar en env vars)
+5. **Streaming**: respuestas largas sin streaming que bloquean la UI
+
+Si no usa la API de Claude/Anthropic, repórtalo y no hagas cambios.
+Aplica fixes para issues críticos (secrets, falta de error handling). Documenta optimizaciones en CLAUDE-API-AUDIT.md.`
   }
 };
 
