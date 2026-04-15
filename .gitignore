@@ -4,3 +4,22 @@ dist/
 build/
 .env
 .env.*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Electron build artifacts
+*.exe
+out/
+
+# Temp/backup
+*.bak
+*.tmp
