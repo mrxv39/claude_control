@@ -5,16 +5,22 @@ Monitor visual + orquestador autónomo de sesiones Claude Code en Windows Termin
 ## Componentes
 
 - **`electron-monitor/`** — app Electron principal (barra + overlays + tile + tray + notificaciones + auto-update)
-- **`electron-monitor/lib/`** — módulos del orquestador:
+- **`electron-monitor/lib/`** — módulos:
+  - `win32.js` — koffi FFI bindings (user32.dll), enumWtWindows, focusWindow
+  - `overlay-manager.js` — overlay BrowserWindows sobre cada WT (loop 60ms)
+  - `notifications.js` — toast + chime audio + status change tracking
   - `orchestrator-store.js` — persistencia en `~/.claude/claudio-state/orchestrator.json`
   - `project-scanner.js` — descubrimiento de proyectos en directorios configurados
   - `project-analyzer.js` — health checks locales (CLAUDE.md, tests, git, deps)
   - `executor.js` — ejecuta `claude --print` en ramas auto-creadas
   - `scheduler.js` — planificador autónomo fuera de horario laboral
+  - `skill-analyzer.js` — heurístico + Claude analysis de skills por proyecto
   - `git-status.js` — rama y dirty count por proyecto
   - `conversation-reader.js` — lee JSONL de sesiones para log display
+  - `token-monitor.js` — rate limits, pacing decisions, idle detection
   - `token-history.js` — captura uso de tokens al final de cada ciclo 5h en JSONL
   - `stats-aggregator.js` — agregación de datos para el tab Stats del panel
+  - `statusline-writer.js` — escribe rate-limits.json para statusLine hook
 - **`SessionMonitor/`**, **`ClaudeSession/`** — módulos PowerShell antiguos (versión previa)
 - **`instrucciones.html`** — manual de usuario HTML standalone
 

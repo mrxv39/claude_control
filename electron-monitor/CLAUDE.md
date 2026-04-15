@@ -1,5 +1,62 @@
 # electron-monitor — Arquitectura detallada
 
+## Estructura de módulos
+
+| Archivo | Líneas | Responsabilidad |
+|---------|--------|-----------------|
+| `main.js` | ~550 | App lifecycle, IPC handlers, window management, auto-tile |
+| `index.html` | ~790 | Renderer: chips, panel (4 tabs), canvas charts |
+| `styles.css` | ~110 | CSS con custom properties (`:root` vars) |
+| `lib/win32.js` | ~70 | koffi FFI bindings, enumWtWindows, focusWindow |
+| `lib/overlay-manager.js` | ~130 | Overlay BrowserWindows sobre cada WT |
+| `lib/notifications.js` | ~120 | Toast + chime + status change tracking |
+| `lib/orchestrator-store.js` | ~190 | Persistencia: orchestrator.json + log JSONL |
+| `lib/scheduler.js` | ~560 | Pacing, auto-enqueue, tick loop |
+| `lib/executor.js` | ~390 | Spawn `claude --print`, branch management |
+| `lib/skill-analyzer.js` | ~250 | Heuristic + Claude analysis de skills |
+| `lib/token-monitor.js` | ~250 | Rate limits, pacing decisions |
+| `lib/token-history.js` | ~100 | JSONL history por ciclo 5h |
+| `lib/stats-aggregator.js` | ~110 | Dashboard data aggregation |
+| `lib/project-scanner.js` | ~130 | Discover projects in configured dirs |
+| `lib/project-analyzer.js` | ~140 | Health checks (git, deps, tests) |
+| `lib/git-status.js` | ~50 | Branch + dirty count per CWD |
+| `lib/conversation-reader.js` | ~160 | Read Claude JSONL for log display |
+| `lib/statusline-writer.js` | ~80 | Write rate-limits.json for statusLine |
+
+## Tests
+
+- Framework: **vitest** (`npm test` = `vitest run`)
+- Tests en `tests/orchestrator-store.test.js` (13 tests)
+- Solo módulos de lógica pura (sin FFI/Electron)
+
+## IPC Channels (main ↔ renderer)
+
+| Channel | Dirección | Descripción |
+|---------|-----------|-------------|
+| `hide-bar` | renderer→main | Ocultar barra (botón ✕) |
+| `resize-bar` | renderer→main | Ajustar ancho de barra |
+| `get-sessions` | renderer→main | Obtener sesiones + sync overlays + auto-tile |
+| `focus-wt` | renderer→main | Enfocar ventana WT por HWND |
+| `tile-windows` | renderer→main | Tile manual de HWNDs seleccionados |
+| `toggle-panel` | renderer→main | Abrir/cerrar panel orquestador |
+| `get-orchestrator-config` | renderer→main | Leer config |
+| `set-orchestrator-config` | renderer→main | Actualizar config parcial |
+| `run-project-scan` | renderer→main | Escanear proyectos |
+| `get-project-analysis` | renderer→main | Proyectos analizados |
+| `get-queue` | renderer→main | Cola de tareas |
+| `add-to-queue` / `remove-from-queue` | renderer→main | Gestión de cola |
+| `get-scheduler-status` | renderer→main | Estado del scheduler |
+| `pause-scheduler` / `resume-scheduler` | renderer→main | Control scheduler |
+| `get-skills` | renderer→main | Lista de skills disponibles |
+| `get-git-status` | renderer→main | Branch + dirty per CWD |
+| `get-session-log` | renderer→main | Conversation log for display |
+| `get-dashboard-stats` / `get-live-cycle` | renderer→main | Stats tab data |
+| `get-token-history` / `get-token-history-stats` | renderer→main | Token usage history |
+| `run-setup-hook` | renderer→main | Ejecutar setup-hook.ps1 |
+| `hook-missing` | main→renderer | Notificar que falta el hook |
+| `update-available` | main→renderer | Nueva versión disponible |
+| `scheduler-status` | main→renderer | Status update del scheduler |
+
 ## Mecanismo HWND (importante)
 
 WT puede tener **múltiples ventanas en un único proceso** `WindowsTerminal.exe`. La solución:
@@ -16,7 +73,7 @@ Sesiones sin HWND (no han disparado BUSY, o son servicios):
 
 ## Overlays de título
 
-`main.js` crea un `BrowserWindow` por sesión (frame:false, transparent:true, alwaysOnTop, focusable:false, ignoreMouseEvents, show:false) y un loop de 33ms:
+`lib/overlay-manager.js` crea un `BrowserWindow` por sesión (frame:false, transparent:true, alwaysOnTop, focusable:false, ignoreMouseEvents, show:false) y un loop de 60ms (~17fps):
 
 - Espera `ready-to-show` antes de mostrar (evita flash de ventana vacía).
 - Ocupa todo el ancho de la ventana WT menos 140px a la derecha (no tapa botones min/max/cerrar).
