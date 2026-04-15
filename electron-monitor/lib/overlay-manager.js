@@ -111,7 +111,7 @@ function repositionOverlays() {
 
 function startLoop() {
   if (pollTimer) return;
-  pollTimer = setInterval(repositionOverlays, 33);
+  pollTimer = setInterval(repositionOverlays, 60);
 }
 
 function stopLoop() {

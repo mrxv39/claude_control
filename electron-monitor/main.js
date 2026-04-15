@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, Notification, shell } = require('electron');
-const { execSync } = require('child_process');
+const { execSync, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const store = require('./lib/orchestrator-store');
@@ -240,13 +240,17 @@ function autoTile(hwnds) {
 
 // ---- Get sessions (with HWND resolution + overlays + auto-tile) ----
 function getSessions() {
-  const r = execSync(
-    `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${resolveScript('get-sessions.ps1')}"`,
-    { encoding: 'utf-8', timeout: 15000 }
-  ).trim();
-  if (!r) return [];
-  const p = JSON.parse(r);
-  return Array.isArray(p) ? p : [p];
+  return new Promise((resolve) => {
+    const script = resolveScript('get-sessions.ps1');
+    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
+      { encoding: 'utf-8', timeout: 15000 }, (err, stdout) => {
+        if (err || !stdout) return resolve([]);
+        try {
+          const p = JSON.parse(stdout.trim());
+          resolve(Array.isArray(p) ? p : [p]);
+        } catch { resolve([]); }
+      });
+  });
 }
 
 function resolveHwnds(arr) {
@@ -293,7 +297,7 @@ function resolveHwnds(arr) {
 
 ipcMain.handle('get-sessions', async () => {
   try {
-    const arr = getSessions();
+    const arr = await getSessions();
     if (arr.length === 0) { overlayManager.syncOverlays([]); return []; }
 
     resolveHwnds(arr);
@@ -523,7 +527,7 @@ app.whenReady().then(() => {
     // Start the autonomous scheduler
     scheduler.start({
       getSessions: async () => {
-        try { return getSessions(); }
+        try { return await getSessions(); }
         catch { return []; }
       },
       onStatus: (status) => {
