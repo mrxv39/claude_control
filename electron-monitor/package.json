@@ -20,6 +20,8 @@
     "files": [
       "main.js",
       "index.html",
+      "styles.css",
+      "lib/**/*.js",
       "get-sessions.ps1",
       "claude-state-hook.ps1",
       "node_modules/koffi/**/*"
