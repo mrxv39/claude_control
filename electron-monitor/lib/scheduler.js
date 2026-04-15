@@ -86,6 +86,12 @@ async function hasUserBusySessions() {
  * Get priority level for a project based on last commit age.
  * Manual overrides take precedence. Blacklist always wins.
  */
+/**
+ * @param {string} name
+ * @param {Object} proj - Project data with checks.lastCommitDays
+ * @param {OrchestratorConfig} config
+ * @returns {'high'|'medium'|'low'|'ignored'}
+ */
 function getProjectPriority(name, proj, config) {
   const blacklist = config.blacklist || [];
   if (blacklist.includes(name)) return 'ignored';
@@ -504,6 +510,7 @@ function start(opts = {}) {
   }, 5000);
 }
 
+/** Stop the scheduler and kill any running tasks. */
 function stop() {
   if (timer) { clearTimeout(timer); timer = null; }
   executor.emergencyStop();
@@ -521,6 +528,7 @@ function resume() {
   if (!timer) scheduleTick();
 }
 
+/** @returns {{running: boolean, paused: boolean, currentMode: string, rateLimits: Object, pacingDecision: Object}} */
 function getStatus() {
   const config = store.load();
   const idleMin = tokenMonitor.getIdleMinutes();

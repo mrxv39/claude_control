@@ -6,6 +6,21 @@
  *   ~/.claude/claudio-state/orchestrator-log.jsonl — execution history (append-only)
  */
 
+/**
+ * @typedef {Object} OrchestratorConfig
+ * @property {string[]} projectDirs
+ * @property {{start: number, end: number}} workHours
+ * @property {number} dailyBudgetUsd
+ * @property {number} todaySpentUsd
+ * @property {string} todayDate
+ * @property {Object<string, Object>} projects
+ * @property {Object[]} queue
+ * @property {string} timezone
+ * @property {boolean} pacingEnabled
+ * @property {number} pacingMaxTarget
+ * @property {number} pacingExponent
+ */
+
 const fs = require('fs');
 const path = require('path');
 
@@ -43,6 +58,7 @@ function ensureDir() {
   if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
 }
 
+/** @returns {OrchestratorConfig} Config merged with defaults, daily spend reset if date changed. */
 function load() {
   ensureDir();
   if (!fs.existsSync(CONFIG_PATH)) return { ...DEFAULTS };
@@ -61,11 +77,13 @@ function load() {
   }
 }
 
+/** @param {OrchestratorConfig} data */
 function save(data) {
   ensureDir();
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), 'utf-8');
 }
 
+/** @param {Partial<OrchestratorConfig>} partial @returns {OrchestratorConfig} */
 function update(partial) {
   const data = load();
   Object.assign(data, partial);
@@ -97,6 +115,7 @@ function getQueue() {
   return load().queue;
 }
 
+/** @param {{project: string, skill: string, id?: string, status?: string}} task @returns {Object} Task with id, status, createdAt */
 function enqueue(task) {
   const data = load();
   task.id = task.id || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -149,12 +168,14 @@ function budgetRemaining() {
 
 // --- Execution log (append-only JSONL) ---
 
+/** @param {{skill: string, status: string, project?: string, branch?: string, taskId?: string}} entry */
 function logExecution(entry) {
   ensureDir();
   entry.timestamp = entry.timestamp || new Date().toISOString();
   fs.appendFileSync(LOG_PATH, JSON.stringify(entry) + '\n', 'utf-8');
 }
 
+/** @param {number} [maxLines=50] @returns {Object[]} Last N log entries */
 function readLog(maxLines = 50) {
   if (!fs.existsSync(LOG_PATH)) return [];
   try {
