@@ -80,6 +80,8 @@ function createWindow() {
     frame: false, transparent: false,
     alwaysOnTop: true, skipTaskbar: false, resizable: false,
     backgroundColor: '#181825',
+    // Security note: contextIsolation:false is intentional — this is a local-only app
+    // that never loads remote content. nodeIntegration is needed for IPC in the renderer.
     webPreferences: { nodeIntegration: true, contextIsolation: false }
   });
   mainWindow.loadFile('index.html');
@@ -516,7 +518,9 @@ function playChime() {
         fs.writeFileSync(chimePath, generateChimeWav());
       }
     }
-    execSync(`powershell.exe -NoProfile -Command "(New-Object Media.SoundPlayer '${chimePath}').PlaySync()"`,
+    // Use execFile with array args to avoid command injection if USERPROFILE contains special chars
+    require('child_process').execFileSync('powershell.exe',
+      ['-NoProfile', '-Command', `(New-Object Media.SoundPlayer '${chimePath.replace(/'/g, "''")}').PlaySync()`],
       { timeout: 5000 });
   } catch {}
 }
