@@ -10,8 +10,8 @@
   <div class="chips" id="chips"></div>
   <span class="stats" id="stats"></span>
   <span id="idle-indicator" style="display:none;font-size:10px;color:#bb9af7;background:rgba(187,154,247,.15);padding:2px 6px;border-radius:3px;flex-shrink:0;-webkit-app-region:no-drag;" title="Ejecutando tareas automáticas"></span>
-  <button class="gear" id="gear-btn" title="Panel del orquestador">&#9881;</button>
-  <button class="close" onclick="ipcRenderer.invoke('hide-bar')">✕</button>
+  <button class="gear" id="gear-btn" title="Panel del orquestador" aria-label="Abrir panel del orquestador">&#9881;</button>
+  <button class="close" onclick="ipcRenderer.invoke('hide-bar')" aria-label="Ocultar barra">✕</button>
 </div>
 <div class="panel" id="panel">
   <div style="display:flex;align-items:center;">
