@@ -175,11 +175,11 @@ async function refresh() {
     const sched = await ipcRenderer.invoke('get-scheduler-status');
     const ind = document.getElementById('idle-indicator');
     if (sched.rateLimits) {
-      const pct = sched.rateLimits.fiveHour.usedPercent;
+      const pct = Math.round(sched.rateLimits.fiveHour.usedPercent);
       const p = sched.pacingDecision;
       const color = pct < 50 ? '#9ece6a' : pct < 80 ? '#e0af68' : '#f7768e';
       let label = `5h:${pct}%`;
-      if (p && p.targetUsage !== undefined) label += `→${p.targetUsage}%`;
+      if (p && p.targetUsage !== undefined) label += `→${Math.round(p.targetUsage)}%`;
       if (p && p.action === 'burst') label += ' BURST';
       else if (p && p.action === 'coast') label += ' coast';
       if (sched.running) {
