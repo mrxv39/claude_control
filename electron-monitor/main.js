@@ -10,6 +10,7 @@ const executor = require('./lib/executor');
 const tokenHistory = require('./lib/token-history');
 const gitStatus = require('./lib/git-status');
 const conversationReader = require('./lib/conversation-reader');
+const statsAggregator = require('./lib/stats-aggregator');
 const koffi = require('koffi');
 
 // Win32
@@ -725,6 +726,9 @@ ipcMain.handle('emergency-stop', () => { scheduler.pause(); return true; });
 
 ipcMain.handle('get-token-history', () => tokenHistory.readHistory(50));
 ipcMain.handle('get-token-history-stats', () => tokenHistory.getStats());
+
+ipcMain.handle('get-dashboard-stats', () => statsAggregator.getDashboardStats());
+ipcMain.handle('get-live-cycle', () => statsAggregator.getLiveCycle());
 
 ipcMain.handle('add-to-queue', (ev, task) => store.enqueue(task));
 ipcMain.handle('remove-from-queue', (ev, taskId) => { store.dequeue(taskId); return true; });

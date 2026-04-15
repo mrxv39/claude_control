@@ -34,6 +34,7 @@ const DEFAULTS = {
   pacingExponent: 0.6,    // curve shape: lower = more conservative early
   sevenDayThrottle: 80,   // forced coast when 7d > this %
   sevenDayCaution: 60,    // reduce maxTarget when 7d > this %
+  timezone: 'Europe/Madrid',
   projects: {},
   queue: []
 };

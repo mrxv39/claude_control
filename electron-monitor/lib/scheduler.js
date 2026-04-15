@@ -15,6 +15,7 @@ const store = require('./orchestrator-store');
 const executor = require('./executor');
 const tokenMonitor = require('./token-monitor');
 const tokenHistory = require('./token-history');
+const analyzer = require('./project-analyzer');
 
 let timer = null;
 let running = false;
@@ -23,20 +24,28 @@ let currentInterval = 60 * 1000;
 let lastTaskStart = null;
 let getSessionsFn = null;
 let onStatusChange = null;
+let lastTickDebug = null;
 
 const STUCK_TIMEOUT = 6 * 60 * 1000; // 6 min — if task runs longer, force reset
 
 // Priority order for auto-enqueue
 const SCORE_SKILLS = [
-  { maxScore: 3, skills: ['security-review', 'audit-claude-md'] },
-  { maxScore: 5, skills: ['audit-claude-md', 'dep-update'] },
-  { maxScore: 7, skills: ['add-tests', 'ui-polish'] },
-  { maxScore: 10, skills: ['git-cleanup'] },
+  { maxScore: 3, skills: ['security-review', 'supabase-audit', 'audit-claude-md'] },
+  { maxScore: 5, skills: ['audit-claude-md', 'dep-update', 'perf-audit'] },
+  { maxScore: 7, skills: ['add-tests', 'ui-polish', 'perf-audit', 'fix-types'] },
+  { maxScore: 10, skills: ['git-cleanup', 'simplify', 'fix-types'] },
 ];
 
 function isOutsideWorkHours() {
   const config = store.load();
-  const hour = new Date().getHours();
+  const tz = config.timezone || 'Europe/Madrid';
+  let hour;
+  try {
+    const localStr = new Date().toLocaleString('en-US', { timeZone: tz, hour12: false, hour: '2-digit' });
+    hour = parseInt(localStr, 10);
+  } catch {
+    hour = new Date().getHours(); // fallback to system timezone
+  }
   const { start, end } = config.workHours;
   if (start < end) {
     return hour < start || hour >= end;
@@ -47,14 +56,27 @@ function isOutsideWorkHours() {
 
 // Budget disabled for Max plan — tokens are prepaid, unused = wasted
 
-async function hasUserBusySessions() {
-  if (!getSessionsFn) return false;
+/**
+ * Returns the set of project paths with active Claude sessions (BUSY).
+ * Used to avoid running autonomous tasks on projects the user is working on.
+ */
+async function getBusyProjectPaths() {
+  if (!getSessionsFn) return new Set();
   try {
     const sessions = await getSessionsFn();
-    return sessions.some(s => s.isClaude && s.status === 'BUSY');
+    const paths = sessions
+      .filter(s => s.isClaude && s.status === 'BUSY')
+      .map(s => s.cwd)
+      .filter(Boolean);
+    return new Set(paths);
   } catch {
-    return false;
+    return new Set();
   }
+}
+
+async function hasUserBusySessions() {
+  const busy = await getBusyProjectPaths();
+  return busy.size > 0;
 }
 
 /**
@@ -92,51 +114,81 @@ function autoEnqueue(burstMode = false) {
   );
 
   let enqueued = 0;
-  const maxEnqueue = burstMode ? 10 : 5;
+  const maxEnqueue = burstMode ? 20 : 10;
 
   const eligible = Object.entries(projects)
     .filter(([name]) => !busyProjects.has(name))
     .map(([name, proj]) => ({ name, proj, priority: getProjectPriority(name, proj, config) }))
     .filter(p => p.priority !== 'ignored');
 
-  const priorityOrder = { high: 0, medium: 1, low: 2 };
+  const priorityOrder = { high: 1, medium: 2, low: 3 };
   const sorted = eligible.sort((a, b) => {
-    const pDiff = (priorityOrder[a.priority] || 3) - (priorityOrder[b.priority] || 3);
+    const pDiff = (priorityOrder[a.priority] || 4) - (priorityOrder[b.priority] || 4);
     if (pDiff !== 0) return pDiff;
     return (a.proj.score || 5) - (b.proj.score || 5);
   });
 
-  // Only enqueue 'low' projects if no high/medium are eligible
-  const hasHigherPriority = sorted.some(p => p.priority === 'high' || p.priority === 'medium');
-
-  // Read log once outside the loop (was inside triple-nested loop before)
+  // Read log once outside the loop
   const recentLog = store.readLog(100);
+
+  // Build ordered skill list per project: primary skills (matching score) first, then rest
+  function getSkillsForProject(proj) {
+    const score = proj.score || 5;
+    // Find primary skills (first matching rule), then collect rest as secondary
+    let primaryRule = null;
+    for (const rule of SCORE_SKILLS) {
+      if (score <= rule.maxScore) { primaryRule = rule; break; }
+    }
+    if (!primaryRule) primaryRule = SCORE_SKILLS[SCORE_SKILLS.length - 1];
+    const primary = [...primaryRule.skills];
+    const seen = new Set(primary);
+    const secondary = [];
+    for (const rule of SCORE_SKILLS) {
+      if (rule === primaryRule) continue;
+      for (const s of rule.skills) {
+        if (!seen.has(s)) { secondary.push(s); seen.add(s); }
+      }
+    }
+    return [...primary, ...secondary];
+  }
+
+  // Helper: check if a project has any available (not recently ran) skill
+  function hasAvailableSkill(name, proj) {
+    return getSkillsForProject(proj).some(skill => {
+      if (!executor.SKILLS[skill]) return false;
+      return !recentLog.some(
+        l => l.project === name && l.skill === skill &&
+             l.timestamp && (Date.now() - new Date(l.timestamp).getTime()) < 7 * 24 * 60 * 60 * 1000
+      );
+    });
+  }
+
+  // Only skip 'low' projects if high/medium actually have available skills
+  const higherHasWork = sorted
+    .filter(p => p.priority === 'high' || p.priority === 'medium')
+    .some(p => hasAvailableSkill(p.name, p.proj));
 
   for (const { name, proj, priority } of sorted) {
     if (enqueued >= maxEnqueue) break;
-    if (priority === 'low' && hasHigherPriority) continue;
+    if (priority === 'low' && higherHasWork) continue;
 
-    for (const rule of SCORE_SKILLS) {
-      if ((proj.score || 5) <= rule.maxScore) {
-        for (const skill of rule.skills) {
-          const recentlyRan = recentLog.some(
-            l => l.project === name && l.skill === skill &&
-                 l.timestamp && (Date.now() - new Date(l.timestamp).getTime()) < 7 * 24 * 60 * 60 * 1000
-          );
-          if (recentlyRan) continue;
+    const skills = getSkillsForProject(proj);
+    for (const skill of skills) {
+      if (enqueued >= maxEnqueue) break;
+      const recentlyRan = recentLog.some(
+        l => l.project === name && l.skill === skill &&
+             l.timestamp && (Date.now() - new Date(l.timestamp).getTime()) < 7 * 24 * 60 * 60 * 1000
+      );
+      if (recentlyRan) continue;
 
-          if (executor.SKILLS[skill]) {
-            store.enqueue({
-              project: name,
-              skill,
-              projectPath: proj.path,
-              auto: true
-            });
-            enqueued++;
-            if (enqueued >= maxEnqueue) break;
-          }
-        }
-        break;
+      if (executor.SKILLS[skill]) {
+        store.enqueue({
+          project: name,
+          skill,
+          projectPath: proj.path,
+          auto: true
+        });
+        enqueued++;
       }
     }
   }
@@ -149,9 +201,15 @@ function autoEnqueue(burstMode = false) {
  * burst/accelerate → expensive tasks first (maximize token burn)
  * pace/coast → cheap tasks first (preserve budget)
  */
-function selectTask(pacingAction) {
+function selectTask(pacingAction, busyProjectPaths) {
   const config = store.load();
-  const pending = config.queue.filter(t => t.status === 'pending');
+  let pending = config.queue.filter(t => t.status === 'pending');
+
+  // Skip tasks whose project has an active Claude session
+  if (busyProjectPaths && busyProjectPaths.size > 0) {
+    pending = pending.filter(t => !busyProjectPaths.has(t.projectPath));
+  }
+
   if (!pending.length) return null;
 
   const preferExpensive = (pacingAction === 'burst' || pacingAction === 'accelerate');
@@ -177,12 +235,16 @@ async function tick() {
     notifyStatus('recovered', 'Tarea stuck detectada — reset forzado');
   }
 
-  if (running || paused) return;
+  if (running || paused) {
+    lastTickDebug = { outsideHours: null, idle: null, busy: null, pacingAction: null, reason: running ? 'task running' : 'paused' };
+    return;
+  }
 
   const config = store.load();
   const outsideHours = isOutsideWorkHours();
   const idle = config.idleEnabled && tokenMonitor.isUserIdle(config.idleMinutes || 15);
-  const busy = await hasUserBusySessions();
+  const busyPaths = await getBusyProjectPaths();
+  const busy = busyPaths.size > 0;
 
   // Get pacing decision
   const pacingConfig = {
@@ -216,76 +278,91 @@ async function tick() {
   // Stale data guard: if data is stale and we're not in off-hours, wait
   if (pacing && pacing.cycle && pacing.cycle.isStale && !outsideHours) {
     currentMode = null;
+    lastTickDebug = { outsideHours, idle, busy, pacingAction, reason: 'rate data stale' };
     notifyStatus('waiting', 'Rate data stale — esperando actualización');
     return;
   }
 
   // Determine execution mode (priority: off-hours > idle > capacity)
-  if (outsideHours && !busy) {
+  // Note: busy check is per-project (at task selection), not global.
+  // The scheduler can run tasks on non-busy projects while the user works on others.
+  lastTickDebug = { outsideHours, idle, busy, busyProjects: busyPaths.size, pacingAction, reason: null };
+  if (outsideHours) {
     currentMode = 'off-hours';
-  } else if (!outsideHours && idle && !busy) {
+  } else if (idle) {
     currentMode = 'idle';
-  } else if (!outsideHours && !busy && pacing && pacingAction !== 'coast' && pacingAction !== 'wait') {
+  } else if (pacing && pacingAction !== 'coast' && pacingAction !== 'wait') {
     currentMode = 'capacity';
-  } else if (!outsideHours && !busy && oldCapacity) {
+  } else if (oldCapacity) {
     // Fallback when pacing disabled
     currentMode = 'capacity';
   } else {
     currentMode = null;
-    const rateLimits = tokenMonitor.getRateLimits();
-    const usedPct = rateLimits ? rateLimits.fiveHour.usedPercent : null;
     const pacingStr = pacing ? ` | ${pacing.action}: ${pacing.reason}` : '';
-    const reason = busy ? 'Sesiones activas — esperando' :
-                   pacingAction === 'coast' ? `Coast — ${pacing.reason}` :
+    const reason = pacingAction === 'coast' ? `Coast — ${pacing.reason}` :
                    !outsideHours && !idle ? `Idle: ${Math.round(tokenMonitor.getIdleMinutes())}/${config.idleMinutes || 15} min${pacingStr}` :
                    'Esperando';
+    lastTickDebug = { outsideHours, idle, busy, busyProjects: busyPaths.size, pacingAction, reason };
     notifyStatus('waiting', reason);
     return;
   }
 
 
-  // Burst mode: allow multiple tasks per tick
-  const isBurst = pacingAction === 'burst';
-  const maxTasksPerTick = isBurst ? 3 : 1;
-  let tasksThisTick = 0;
+  // Parallel execution: run up to MAX_PARALLEL tasks on different projects
+  const isBurst = pacingAction === 'burst' || pacingAction === 'accelerate';
+  const MAX_PARALLEL = isBurst ? 3 : 2;
 
-  while (tasksThisTick < maxTasksPerTick) {
-    // Re-check for busy sessions before each additional task
-    if (tasksThisTick > 0 && await hasUserBusySessions()) break;
+  // Pre-fill queue if running low on pending tasks
+  const pendingCount = store.getQueue().filter(t => t.status === 'pending').length;
+  if (pendingCount < 5) {
+    const n = autoEnqueue(isBurst);
+    if (n > 0) notifyStatus('enqueued', `Auto-encoladas ${n} tareas`);
+  }
 
-    // Get next task (cost-aware selection)
-    let task = selectTask(pacingAction);
+  // Select up to MAX_PARALLEL tasks on DIFFERENT projects
+  const tasks = [];
+  const selectedProjects = new Set();
+  for (let i = 0; i < MAX_PARALLEL; i++) {
+    // Exclude already-selected projects (one task per project per tick)
+    const excludePaths = new Set([...busyPaths]);
+    selectedProjects.forEach(p => excludePaths.add(p));
 
-    // If no tasks, try auto-enqueue
-    if (!task) {
+    let task = selectTask(pacingAction, excludePaths);
+    if (!task && i === 0) {
       const n = autoEnqueue(isBurst);
       if (n > 0) {
-        task = selectTask(pacingAction);
+        task = selectTask(pacingAction, excludePaths);
         notifyStatus('enqueued', `Auto-encoladas ${n} tareas`);
       }
     }
+    if (!task) break;
+    tasks.push(task);
+    selectedProjects.add(task.projectPath);
+  }
 
-    if (!task) {
-      if (tasksThisTick === 0) notifyStatus('idle', 'Sin tareas pendientes');
-      break;
-    }
+  if (tasks.length === 0) {
+    notifyStatus('idle', 'Sin tareas pendientes');
+    return;
+  }
 
-    // Execute
-    running = true;
-    lastTaskStart = Date.now();
-    const modeLabel = { 'off-hours': '[OFF-HOURS]', 'idle': '[IDLE]', 'capacity': '[CAP]' }[currentMode] || '[AUTO]';
-    const pacingLabel = pacing ? ` ${pacing.action.toUpperCase()}` : '';
+  running = true;
+  lastTaskStart = Date.now();
+  const modeLabel = { 'off-hours': '[OFF-HOURS]', 'idle': '[IDLE]', 'capacity': '[CAP]' }[currentMode] || '[AUTO]';
+  const pacingLabel = pacing ? ` ${pacing.action.toUpperCase()}` : '';
+
+  // Mark all as running
+  for (const task of tasks) {
     store.updateQueueTask(task.id, { status: 'running', startedAt: new Date().toISOString(), mode: currentMode });
-    notifyStatus('running', `${modeLabel}${pacingLabel} ${task.skill} en ${task.project}`);
+  }
+  const taskNames = tasks.map(t => `${t.skill}@${t.project}`).join(', ');
+  notifyStatus('running', `${modeLabel}${pacingLabel} [${tasks.length}x] ${taskNames}`);
 
-    let result;
+  // Execute all in parallel
+  const results = await Promise.allSettled(tasks.map(async (task) => {
     try {
-      result = await executor.execute(task, () => {
+      const result = await executor.execute(task, () => {
         if (currentMode === 'idle' && !tokenMonitor.isUserIdle(2)) {
           executor.emergencyStop();
-          notifyStatus('stopped', 'Usuario activo — ejecución detenida');
-        } else {
-          notifyStatus('running', `${modeLabel}${pacingLabel} ${task.skill} en ${task.project}`);
         }
       });
 
@@ -304,18 +381,30 @@ async function tick() {
         notifyStatus('done', `${task.skill} en ${task.project} — sin cambios`);
       } else {
         notifyStatus('failed', `${task.skill} en ${task.project} — error`);
+        // Retry once if failed by timeout
+        if (result.duration >= 110 && !task.retried) {
+          store.enqueue({ project: task.project, skill: task.skill, projectPath: task.projectPath, auto: true, retried: true });
+          notifyStatus('retry', `Re-encolada ${task.skill} en ${task.project} (timeout retry)`);
+        }
       }
+
+      // Re-analyze project to update score
+      if (result.status === 'done') {
+        try {
+          const updated = await analyzer.analyze({ name: task.project, path: task.projectPath });
+          store.setProject(task.project, { ...store.load().projects[task.project], ...updated, lastAnalysis: new Date().toISOString() });
+        } catch {}
+      }
+
+      return result;
     } catch (err) {
       store.updateQueueTask(task.id, { status: 'failed', error: err.message });
       notifyStatus('failed', `Error en ${task.skill}: ${err.message}`);
+      return { status: 'failed' };
     }
+  }));
 
-    running = false;
-    tasksThisTick++;
-
-    // Only continue burst loop if task was fast (<90s)
-    if (!result || result.duration > 90) break;
-  }
+  running = false;
 }
 
 function notifyStatus(state, message) {
@@ -350,6 +439,10 @@ function start(opts = {}) {
   if (timer) return; // already running
   // First tick after 5s delay (let app initialize), then dynamic scheduling
   timer = setTimeout(async () => {
+    // Pre-populate queue if empty so first tick has work to do
+    const pending = store.getQueue().filter(t => t.status === 'pending');
+    if (pending.length === 0) autoEnqueue();
+
     await tick();
     if (!paused && timer !== null) scheduleTick();
   }, 5000);
@@ -396,6 +489,7 @@ function getStatus() {
     pendingTasks: config.queue.filter(t => t.status === 'pending').length,
     runningTask: running ? (executor.execute._currentTask || null) : null,
     tickInterval: currentInterval,
+    lastTickDebug,
     lastMessage: null
   };
 }

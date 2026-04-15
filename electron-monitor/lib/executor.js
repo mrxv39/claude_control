@@ -34,11 +34,48 @@ const SKILLS = {
   },
   'add-tests': {
     model: 'opus',
-    prompt: `Analiza este proyecto e identifica las funciones/módulos más críticos que no tienen tests. Añade tests para los 2-3 paths más importantes. Usa el framework de testing que ya use el proyecto (vitest, jest, pytest, etc). Si no hay framework, sugiere uno pero no lo instales. No modifiques código existente, solo añade tests nuevos.`
+    prompt: `Analiza este proyecto y añade tests para los 2-3 paths más críticos.
+
+**Paso 1 — Framework**: Detecta si hay framework de test configurado:
+- Node: busca vitest/jest/mocha en package.json devDependencies
+- Python: busca pytest/unittest en requirements.txt o pyproject.toml
+- Rust: los tests son built-in (#[cfg(test)])
+Si NO hay framework: instálalo (vitest para Node, pytest para Python) y configúralo (vitest.config.ts o pytest.ini). Añade script "test" en package.json si falta.
+
+**Paso 2 — Tests**: Identifica funciones/módulos críticos sin cobertura (APIs, lógica de negocio, validaciones). Crea archivos de test con al menos 3 test cases cada uno.
+
+**Paso 3 — Verificar**: Ejecuta los tests que creaste. Si fallan, arregla los tests (no el código fuente). Si el framework no se instaló correctamente, repórtalo en el output.
+
+No modifiques código existente excepto package.json/pyproject.toml para añadir el framework.`
   },
   'git-cleanup': {
     model: 'sonnet',
     prompt: `Limpia este repositorio git: elimina ramas locales ya mergeadas (excepto master/main), verifica que .gitignore cubre node_modules, dist, build, .env, *.log, y otros patrones comunes para el stack del proyecto. Solo modifica .gitignore si le faltan entradas importantes.`
+  },
+  'supabase-audit': {
+    model: 'opus',
+    prompt: `Audita la seguridad de Supabase en este proyecto:
+1. **RLS**: Lista todas las tablas y verifica que tienen RLS activado. Si alguna tabla con datos sensibles (users, transactions, personal data) no tiene RLS, repórtalo como CRÍTICO.
+2. **Storage**: Busca buckets públicos. Si contienen documentos personales (DNI, facturas, contratos), cambia la policy a authenticated-only y usa signed URLs.
+3. **Edge Functions**: Verifica que validan auth (req.headers.get('Authorization')). Busca secrets hardcodeados.
+4. **Client-side**: Busca queries con .from() sin filtro de user_id que podrían exponer datos de otros usuarios.
+Crea un archivo SECURITY-AUDIT.md con los hallazgos. Solo arregla issues CRÍTICOS directamente en el código.`
+  },
+  'perf-audit': {
+    model: 'sonnet',
+    prompt: `Analiza el rendimiento de este proyecto. Busca:
+1. **Queries N+1**: loops que hacen queries individuales en vez de batch/join. Busca patrones como for-loop + await supabase.from() o prisma.find().
+2. **Bundle**: imports pesados que podrían ser lazy (moment.js, lodash completo, iconos completos). Sugiere alternativas tree-shakeable.
+3. **React renders**: componentes sin memo/useMemo que reciben objetos nuevos en cada render, listas sin key estable, useEffect sin deps array.
+4. **Índices SQL**: queries con WHERE/ORDER BY en columnas sin índice visible en las migraciones.
+No modifiques código. Crea PERF-REPORT.md con hallazgos ordenados por impacto (alto/medio/bajo) y la solución sugerida para cada uno.`
+  },
+  'fix-types': {
+    model: 'sonnet',
+    prompt: `Mejora el tipado de este proyecto:
+- **TypeScript**: Busca usos de \`any\`, parámetros sin tipo, funciones sin tipo de retorno. Añade tipos concretos. No uses \`any\` ni \`unknown\` como solución.
+- **Python**: Añade type hints a funciones que no los tienen (parámetros y retorno). Usa tipos de typing (Optional, List, Dict, Union).
+Solo modifica tipos/hints, no cambies lógica ni comportamiento. Prioriza archivos de API, modelos de datos, y funciones exportadas.`
   },
   'ui-polish': {
     model: 'sonnet',
@@ -50,7 +87,8 @@ Solo aplica cambios que mejoren sin cambiar funcionalidad. No toques lógica de 
   }
 };
 
-const WATCHDOG_MS = 5 * 60 * 1000; // 5 min hard kill
+const WATCHDOG_MS = 8 * 60 * 1000; // 8 min hard kill
+const IDLE_TIMEOUT_MS = 120 * 1000; // 2 min without output = hung
 
 function ensureRunsDir() {
   if (!fs.existsSync(RUNS_DIR)) fs.mkdirSync(RUNS_DIR, { recursive: true });
@@ -155,6 +193,7 @@ async function execute(task, onProgress) {
       '--print',
       '-p', skill.prompt,
       '--model', skill.model,
+      '--max-turns', '30',
       '--output-format', 'text',
       '--dangerously-skip-permissions'
     ];
@@ -169,15 +208,25 @@ async function execute(task, onProgress) {
     proc.stdin.end();
 
     // Manual watchdog: kill process after WATCHDOG_MS
-    // On Windows, kill() always does TerminateProcess (SIGTERM/SIGKILL are equivalent)
     const watchdog = setTimeout(() => {
       logStream.write(`\n=== WATCHDOG: killing after ${WATCHDOG_MS / 1000}s ===\n`);
       try { proc.kill(); } catch {}
     }, WATCHDOG_MS);
 
+    // Idle timeout: kill if no output for IDLE_TIMEOUT_MS
+    let lastOutputTime = Date.now();
+    const idleCheck = setInterval(() => {
+      if (Date.now() - lastOutputTime > IDLE_TIMEOUT_MS) {
+        logStream.write(`\n=== IDLE TIMEOUT: no output for ${IDLE_TIMEOUT_MS / 1000}s ===\n`);
+        try { proc.kill(); } catch {}
+        clearInterval(idleCheck);
+      }
+    }, 10000);
+
     let output = '';
 
     proc.stdout.on('data', (data) => {
+      lastOutputTime = Date.now();
       const text = data.toString();
       output += text;
       logStream.write(text);
@@ -185,11 +234,13 @@ async function execute(task, onProgress) {
     });
 
     proc.stderr.on('data', (data) => {
+      lastOutputTime = Date.now();
       logStream.write(`[stderr] ${data.toString()}`);
     });
 
     proc.on('close', async (code) => {
       clearTimeout(watchdog);
+      clearInterval(idleCheck);
       const duration = Math.round((Date.now() - startTime) / 1000);
       logStream.write(`\n=== Finished (code ${code}) in ${duration}s ===\n`);
       logStream.end();
@@ -241,22 +292,22 @@ async function execute(task, onProgress) {
     });
 
     // Store process reference for emergency stop
-    execute._currentProc = proc;
-    execute._currentTask = task;
+    if (!execute._procs) execute._procs = new Map();
+    execute._procs.set(task.id, proc);
+    proc.on('close', () => execute._procs.delete(task.id));
   });
 }
 
 /**
- * Kill the currently running execution.
+ * Kill all currently running executions.
  */
 function emergencyStop() {
-  if (execute._currentProc) {
-    try { execute._currentProc.kill('SIGTERM'); } catch {}
-    execute._currentProc = null;
-    execute._currentTask = null;
-    return true;
+  if (!execute._procs || execute._procs.size === 0) return false;
+  for (const [id, proc] of execute._procs) {
+    try { proc.kill('SIGTERM'); } catch {}
   }
-  return false;
+  execute._procs.clear();
+  return true;
 }
 
 module.exports = { execute, emergencyStop, SKILLS };

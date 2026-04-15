@@ -77,6 +77,27 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
 .queue-failed { background:rgba(247,118,142,.15); color:#f7768e; }
 .queue-info { font-size:11px; color:#c0caf5; flex:1; }
 .queue-cost { font-size:10px; color:#565f89; }
+/* Stats tab */
+.stats-section { margin-bottom:14px; }
+.stats-section-title { font-size:11px; color:#565f89; font-weight:600; text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px; }
+.stats-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.stats-card { background:#1e1e2e; border:1px solid #2a2b3d; border-radius:8px; padding:10px 14px; }
+.stats-card h3 { font-size:10px; color:#565f89; font-weight:500; margin-bottom:4px; }
+.stats-value { font-size:20px; font-weight:700; color:#c0caf5; }
+.stats-sub { font-size:10px; color:#565f89; margin-top:2px; }
+.stats-cycle-track { width:100%; height:24px; background:rgba(255,255,255,.06); border-radius:4px; position:relative; overflow:hidden; margin-bottom:4px; }
+.stats-cycle-fill { height:100%; border-radius:4px; transition:width .5s ease; }
+.stats-cycle-target { position:absolute; top:0; height:100%; width:2px; background:#e0af68; opacity:.7; }
+.stats-cycle-label { position:absolute; top:0; left:0; right:0; height:100%; display:flex; align-items:center; justify-content:center; font-size:10px; color:#c0caf5; font-weight:500; text-shadow:0 1px 2px rgba(0,0,0,.5); }
+.stats-chart-wrap { overflow-x:auto; scrollbar-width:thin; scrollbar-color:#2a2b3d #181825; }
+.stats-table { width:100%; border-collapse:collapse; font-size:11px; }
+.stats-table th { text-align:left; color:#565f89; font-weight:500; padding:4px 6px; border-bottom:1px solid #2a2b3d; }
+.stats-table td { color:#c0caf5; padding:4px 6px; border-bottom:1px solid rgba(42,43,61,.4); }
+.stats-hbar-row { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+.stats-hbar-name { font-size:11px; color:#c0caf5; width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; }
+.stats-hbar-track { flex:1; height:16px; background:rgba(255,255,255,.04); border-radius:3px; overflow:hidden; }
+.stats-hbar-fill { height:100%; background:#7aa2f7; border-radius:3px; transition:width .3s ease; }
+.stats-hbar-count { font-size:10px; color:#565f89; width:30px; text-align:right; flex-shrink:0; }
 </style>
 </head>
 <body>
@@ -94,6 +115,7 @@ body { font-family:'Segoe UI',sans-serif; background:#181825; overflow:hidden; u
       <button class="panel-tab active" data-tab="health">Salud</button>
       <button class="panel-tab" data-tab="queue">Cola</button>
       <button class="panel-tab" data-tab="log">Log</button>
+      <button class="panel-tab" data-tab="stats">Stats</button>
     </div>
     <span class="panel-budget" id="budget-display"></span>
     <div id="panel-close-btn" style="margin-left:8px;background:rgba(247,118,142,.2);border:1px solid rgba(247,118,142,.3);color:#f7768e;font-size:14px;cursor:pointer;padding:4px 12px;border-radius:5px;-webkit-app-region:no-drag;user-select:none;">Cerrar</div>
@@ -331,6 +353,7 @@ async function loadTab(tab) {
   if (tab === 'health') await renderHealth();
   else if (tab === 'queue') await renderQueue();
   else if (tab === 'log') await renderLog();
+  else if (tab === 'stats') await renderStats();
 }
 
 let healthFilter = 'all'; // 'all', 'high', 'medium', 'low', 'ignored'
@@ -719,11 +742,126 @@ async function renderExecLog() {
   panelContent.innerHTML = html;
 }
 
+async function renderStats() {
+  let data, live;
+  try { data = await ipcRenderer.invoke('get-dashboard-stats'); } catch { data = null; }
+  try { live = await ipcRenderer.invoke('get-live-cycle'); } catch { live = null; }
+
+  let html = '';
+
+  // 1. Live cycle indicator
+  html += '<div class="stats-section">';
+  html += '<div class="stats-section-title">Ciclo 5h en vivo</div>';
+  if (live) {
+    const actionColors = { pace: '#9ece6a', accelerate: '#7aa2f7', burst: '#e0af68', coast: '#f7768e', wait: '#565f89' };
+    const fillColor = actionColors[live.action] || '#565f89';
+    html += `<div class="stats-cycle-track">`;
+    html += `<div class="stats-cycle-fill" style="width:${live.usedPercent}%;background:${fillColor};"></div>`;
+    html += `<div class="stats-cycle-target" style="left:${live.targetPercent}%;"></div>`;
+    html += `<div class="stats-cycle-label">${live.usedPercent}% usado · Objetivo: ${live.targetPercent}% · ${live.remainingMin}m restantes · 7d: ${live.sevenDayPercent}%</div>`;
+    html += `</div>`;
+    // Show scheduler debug info
+    try {
+      const sched = await ipcRenderer.invoke('get-scheduler-status');
+      const d = sched.lastTickDebug;
+      const mode = sched.currentMode || 'ninguno';
+      const paused = sched.paused ? ' (PAUSADO)' : '';
+      const pending = sched.pendingTasks;
+      let debugLine = `Modo: ${mode}${paused} · Tareas pendientes: ${pending}`;
+      if (d) debugLine += ` · offHours: ${d.outsideHours} · idle: ${d.idle} · busy: ${d.busy} · pacing: ${d.pacingAction}`;
+      if (d && d.reason) debugLine += ` · ${d.reason}`;
+      html += `<div style="font-size:10px;color:#565f89;margin-top:4px;">${debugLine}</div>`;
+    } catch {}
+  } else {
+    html += '<div style="font-size:11px;color:#565f89;">Sin datos de rate limit activos</div>';
+  }
+  html += '</div>';
+
+  // 2. Token usage bar chart (last 20 cycles)
+  html += '<div class="stats-section">';
+  html += '<div class="stats-section-title">Uso por ciclo (últimos 20)</div>';
+  if (data && data.cycleChart.length > 0) {
+    const cycles = data.cycleChart;
+    const chartH = 100;
+    const barW = Math.floor(340 / Math.max(cycles.length, 1));
+    const gap = 2;
+    const svgW = cycles.length * barW;
+    html += `<div class="stats-chart-wrap"><svg width="${svgW}" height="${chartH + 18}" viewBox="0 0 ${svgW} ${chartH + 18}">`;
+    // Target line at 95%
+    const targetY = chartH - (95 / 100 * chartH);
+    html += `<line x1="0" y1="${targetY}" x2="${svgW}" y2="${targetY}" stroke="#e0af68" stroke-width="1" stroke-dasharray="4,3" opacity=".5"/>`;
+    for (let i = 0; i < cycles.length; i++) {
+      const pct = cycles[i].fiveHourPercent || 0;
+      const h = pct / 100 * chartH;
+      const x = i * barW + gap / 2;
+      const w = barW - gap;
+      const y = chartH - h;
+      const date = cycles[i].capturedAt ? new Date(cycles[i].capturedAt).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }) : '';
+      html += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="2" fill="#7aa2f7" opacity=".85"><title>${date}: ${pct}%</title></rect>`;
+      if (cycles.length <= 20) {
+        html += `<text x="${x + w / 2}" y="${chartH + 12}" text-anchor="middle" font-size="8" fill="#565f89">${date}</text>`;
+      }
+    }
+    html += '</svg></div>';
+  } else {
+    html += '<div style="font-size:11px;color:#565f89;">Sin datos de ciclos aún</div>';
+  }
+  html += '</div>';
+
+  // 3. Cost summary cards
+  if (data) {
+    html += '<div class="stats-section">';
+    html += '<div class="stats-section-title">Costes</div>';
+    html += '<div class="stats-grid">';
+    html += `<div class="stats-card"><h3>Hoy</h3><div class="stats-value">$${data.costSummary.todayUsd.toFixed(2)}</div></div>`;
+    html += `<div class="stats-card"><h3>Esta semana</h3><div class="stats-value">$${data.costSummary.weekUsd.toFixed(2)}</div><div class="stats-sub">${data.costSummary.weekRuns} ejecuciones</div></div>`;
+    html += `<div class="stats-card"><h3>Este mes</h3><div class="stats-value">$${data.costSummary.monthUsd.toFixed(2)}</div><div class="stats-sub">${data.costSummary.monthRuns} ejecuciones</div></div>`;
+    html += `<div class="stats-card"><h3>Ramas creadas</h3><div class="stats-value">${data.totalBranches}</div></div>`;
+    html += '</div></div>';
+  }
+
+  // 4. Activity by skill
+  if (data && Object.keys(data.activityBySkill).length > 0) {
+    html += '<div class="stats-section">';
+    html += '<div class="stats-section-title">Actividad por skill</div>';
+    html += '<table class="stats-table"><tr><th>Skill</th><th>Total</th><th>OK</th><th>Error</th><th>Éxito</th></tr>';
+    for (const [skill, s] of Object.entries(data.activityBySkill)) {
+      const rate = s.total > 0 ? Math.round(s.done / s.total * 100) : 0;
+      const rateColor = rate > 80 ? '#9ece6a' : rate > 50 ? '#e0af68' : '#f7768e';
+      html += `<tr><td>${esc(skill)}</td><td>${s.total}</td><td>${s.done}</td><td>${s.failed}</td><td style="color:${rateColor};font-weight:600;">${rate}%</td></tr>`;
+    }
+    html += '</table></div>';
+  }
+
+  // 5. Project heatmap
+  if (data && data.projectHeatmap.length > 0) {
+    html += '<div class="stats-section">';
+    html += '<div class="stats-section-title">Proyectos más atendidos</div>';
+    const maxCount = data.projectHeatmap[0].count;
+    for (const p of data.projectHeatmap) {
+      const pct = maxCount > 0 ? (p.count / maxCount * 100) : 0;
+      html += `<div class="stats-hbar-row">`;
+      html += `<div class="stats-hbar-name" title="${esc(p.project)}">${esc(p.project)}</div>`;
+      html += `<div class="stats-hbar-track"><div class="stats-hbar-fill" style="width:${pct}%;"></div></div>`;
+      html += `<div class="stats-hbar-count">${p.count}</div>`;
+      html += `</div>`;
+    }
+    html += '</div>';
+  }
+
+  if (!data || (data.cycleChart.length === 0 && Object.keys(data.activityBySkill).length === 0 && data.projectHeatmap.length === 0)) {
+    html += '<div class="empty-msg">Sin datos históricos aún. Los datos se acumulan con las ejecuciones del orquestador.</div>';
+  }
+
+  panelContent.innerHTML = html;
+}
+
 function esc(str) { return String(str || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
 
 // Live scheduler status updates
 ipcRenderer.on('scheduler-status', (ev, status) => {
   if (currentTab === 'queue' && panel.classList.contains('open')) renderQueue();
+  if (currentTab === 'stats' && panel.classList.contains('open')) renderStats();
 });
 
 // Show setup chip if hook is missing
