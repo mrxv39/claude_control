@@ -14,7 +14,7 @@
   <button class="close" onclick="ipcRenderer.invoke('hide-bar')" aria-label="Ocultar barra">✕</button>
 </div>
 <div class="panel" id="panel">
-  <div style="display:flex;align-items:center;">
+  <div class="panel-header">
     <div class="panel-tabs">
       <button class="panel-tab active" data-tab="health">Salud</button>
       <button class="panel-tab" data-tab="queue">Cola</button>
@@ -22,7 +22,7 @@
       <button class="panel-tab" data-tab="stats">Stats</button>
     </div>
     <span class="panel-budget" id="budget-display"></span>
-    <div id="panel-close-btn" style="margin-left:8px;background:rgba(247,118,142,.2);border:1px solid rgba(247,118,142,.3);color:#f7768e;font-size:14px;cursor:pointer;padding:4px 12px;border-radius:5px;-webkit-app-region:no-drag;user-select:none;">Cerrar</div>
+    <button class="panel-close" id="panel-close-btn" aria-label="Cerrar panel">Cerrar</button>
   </div>
   <div class="panel-content" id="panel-content"></div>
 </div>
@@ -388,66 +388,69 @@ async function renderQueue() {
 
   let html = '';
 
-  // Scheduler controls bar
-  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">`;
-  const stateColor = status.paused ? '#f7768e' : status.outsideWorkHours ? '#9ece6a' : '#e0af68';
+  // Scheduler status header — prominent, always visible
+  const stateColor = status.paused ? 'var(--red)' : status.outsideWorkHours ? 'var(--green)' : 'var(--yellow)';
   const stateLabel = status.paused ? 'PAUSADO' :
                      status.running ? 'EJECUTANDO' :
-                     status.outsideWorkHours ? 'ACTIVO (fuera de horario)' : 'ESPERANDO (horario laboral)';
-  html += `<span style="font-size:11px;color:${stateColor};font-weight:600;">${stateLabel}</span>`;
-  html += `<span style="font-size:10px;color:#565f89;">Horario: ${status.workHours.start}:00-${status.workHours.end}:00</span>`;
-
+                     status.outsideWorkHours ? 'ACTIVO' : 'ESPERANDO';
+  const stateDetail = status.paused ? '' :
+                      status.running ? '' :
+                      status.outsideWorkHours ? 'fuera de horario' : 'horario laboral';
+  const rl = status.rateLimits;
+  const p = status.pacingDecision;
+  const rlStr = rl ? `5h: ${rl.fiveHour.usedPercent}%` : '';
+  html += `<div class="sched-header">`;
+  html += `<div class="sched-dot" style="background:${stateColor};box-shadow:0 0 8px ${stateColor}44;"></div>`;
+  html += `<div>`;
+  html += `<div class="sched-label" style="color:${stateColor};">${stateLabel}</div>`;
+  html += `<div class="sched-meta">${stateDetail}${stateDetail && rlStr ? ' · ' : ''}${rlStr}</div>`;
+  html += `</div>`;
+  html += `<div class="sched-actions">`;
   if (status.paused) {
     html += `<button class="scan-btn" id="resume-btn">Reanudar</button>`;
   } else {
-    html += `<button class="scan-btn" id="pause-btn" style="border-color:rgba(247,118,142,.3);color:#f7768e;">Pausar</button>`;
+    html += `<button class="scan-btn" id="pause-btn" style="border-color:rgba(247,118,142,.2);color:var(--red);">Pausar</button>`;
   }
   html += `<button class="scan-btn" id="add-task-btn">+ Tarea</button>`;
-  html += `</div>`;
+  html += `</div></div>`;
 
-  // Config row
-  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">`;
-  html += `<label style="font-size:10px;color:#565f89;">Horario:</label>`;
-  html += `<input type="number" id="wh-start" value="${status.workHours.start}" min="0" max="23" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
-  html += `<span style="font-size:10px;color:#565f89;">a</span>`;
-  html += `<input type="number" id="wh-end" value="${status.workHours.end}" min="0" max="23" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
-  html += `<label style="font-size:10px;color:#565f89;margin-left:8px;">Budget/día: $</label>`;
-  html += `<input type="number" id="budget-input" value="${status.dailyBudget}" min="0" step="0.5" style="width:50px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
-  html += `<button class="scan-btn" id="save-config-btn" style="font-size:10px;padding:2px 8px;">Guardar</button>`;
-  html += `</div>`;
-
-  // Blacklist row
+  // Collapsible config section
   const bl = (config.blacklist || []).join(', ');
-  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">`;
-  html += `<label style="font-size:10px;color:#565f89;">Blacklist:</label>`;
-  html += `<input type="text" id="blacklist-input" value="${esc(bl)}" placeholder="proyecto1, proyecto2" style="flex:1;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 8px;font-size:11px;">`;
-  html += `</div>`;
-
-  // Idle mode config
   const idleChecked = status.idleEnabled ? 'checked' : '';
-  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">`;
-  html += `<label style="font-size:10px;color:#565f89;">Modo idle:</label>`;
-  html += `<input type="checkbox" id="idle-enabled" ${idleChecked} style="-webkit-app-region:no-drag;">`;
-  html += `<label style="font-size:10px;color:#565f89;">Ejecutar tras</label>`;
-  html += `<input type="number" id="idle-minutes" value="${status.idleMinutes}" min="5" max="120" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;">`;
-  html += `<span style="font-size:10px;color:#565f89;">min inactivo</span>`;
-  html += `<span style="font-size:10px;color:#bb9af7;margin-left:auto;">Idle actual: ${status.userIdleFor} min</span>`;
-  html += `</div>`;
-
-  // Capacity mode config with pacing
   const capChecked = status.capacityEnabled ? 'checked' : '';
-  const rl = status.rateLimits;
-  const p = status.pacingDecision;
-  const rlStr = rl ? `5h: ${rl.fiveHour.usedPercent}%` : 'sin datos';
-  const pacingStr = p && p.cycle ? ` | ${p.action} (${p.cycle.remainingMin}m restantes, target ${p.targetUsage}%)` : '';
-  html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">`;
-  html += `<label style="font-size:10px;color:#565f89;">Pacing:</label>`;
-  html += `<input type="checkbox" id="capacity-enabled" ${capChecked} style="-webkit-app-region:no-drag;">`;
-  html += `<label style="font-size:10px;color:#565f89;">Tick:</label>`;
-  html += `<span style="font-size:10px;color:#e0af68;">${Math.round((status.tickInterval || 60000) / 1000)}s</span>`;
-  html += `<input type="number" id="capacity-threshold" value="${status.capacityThreshold}" min="10" max="90" style="width:40px;background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:3px;padding:2px 4px;font-size:11px;display:none;">`;
-  html += `<span style="font-size:10px;color:#9ece6a;margin-left:auto;">${rlStr}${pacingStr}</span>`;
+  const pacingStr = p && p.cycle ? `${p.action} · ${p.cycle.remainingMin}m · target ${p.targetUsage}%` : '';
+  html += `<div class="config-section">`;
+  html += `<div class="config-toggle" id="config-toggle">`;
+  html += `<span class="config-toggle-label">Configuracion</span>`;
+  html += `<span style="font-size:10px;color:var(--text-dim);">${status.workHours.start}:00–${status.workHours.end}:00${pacingStr ? ' · ' + pacingStr : ''}</span>`;
+  html += `<span class="config-toggle-arrow" id="config-arrow">&#9660;</span>`;
   html += `</div>`;
+  html += `<div class="config-body" id="config-body">`;
+  html += `<div class="config-row"><span class="config-label">Horario</span>`;
+  html += `<input type="number" class="config-input" id="wh-start" value="${status.workHours.start}" min="0" max="23">`;
+  html += `<span style="font-size:10px;color:var(--text-dim);">a</span>`;
+  html += `<input type="number" class="config-input" id="wh-end" value="${status.workHours.end}" min="0" max="23">`;
+  html += `<span class="config-label" style="margin-left:12px;">Budget $</span>`;
+  html += `<input type="number" class="config-input" id="budget-input" value="${status.dailyBudget}" min="0" step="0.5" style="width:50px;">`;
+  html += `</div>`;
+  html += `<div class="config-row"><span class="config-label">Blacklist</span>`;
+  html += `<input type="text" class="config-input" id="blacklist-input" value="${esc(bl)}" placeholder="proyecto1, proyecto2">`;
+  html += `</div>`;
+  html += `<div class="config-row"><span class="config-label">Idle</span>`;
+  html += `<input type="checkbox" id="idle-enabled" ${idleChecked} style="-webkit-app-region:no-drag;">`;
+  html += `<span style="font-size:10px;color:var(--text-dim);">tras</span>`;
+  html += `<input type="number" class="config-input" id="idle-minutes" value="${status.idleMinutes}" min="5" max="120">`;
+  html += `<span style="font-size:10px;color:var(--text-dim);">min</span>`;
+  html += `<span class="config-value" style="color:var(--purple);">Actual: ${status.userIdleFor}m</span>`;
+  html += `</div>`;
+  html += `<div class="config-row"><span class="config-label">Pacing</span>`;
+  html += `<input type="checkbox" id="capacity-enabled" ${capChecked} style="-webkit-app-region:no-drag;">`;
+  html += `<span style="font-size:10px;color:var(--text-dim);">Tick:</span>`;
+  html += `<span style="font-size:10px;color:var(--yellow);">${Math.round((status.tickInterval || 60000) / 1000)}s</span>`;
+  html += `<input type="number" class="config-input" id="capacity-threshold" value="${status.capacityThreshold}" min="10" max="90" style="display:none;">`;
+  html += `</div>`;
+  html += `<div style="padding-top:6px;"><button class="scan-btn" id="save-config-btn" style="font-size:10px;padding:3px 12px;">Guardar</button></div>`;
+  html += `</div></div>`;
 
   if (!queue.length) {
     html += `<div class="empty-msg">No hay tareas en cola.<br><span style="font-size:11px;color:#565f89;">Se encolarán automáticamente fuera de horario según la salud de los proyectos.</span></div>`;
@@ -460,7 +463,7 @@ async function renderQueue() {
     if (active.length) {
       const orderA = { running: 0, pending: 1 };
       active.sort((a, b) => (orderA[a.status] || 2) - (orderA[b.status] || 2));
-      html += `<div style="font-size:10px;color:#565f89;margin-bottom:4px;">Pendientes (${active.length})</div>`;
+      html += `<div class="queue-section-label">Pendientes (${active.length})</div>`;
       for (const task of active) {
         const statusClass = task.status === 'pending' ? 'queue-pending' : 'queue-running';
         html += `<div class="queue-item">`;
@@ -478,7 +481,7 @@ async function renderQueue() {
         const tb = b.completedAt || b.startedAt || '';
         return tb.localeCompare(ta);
       });
-      html += `<div style="font-size:10px;color:#565f89;margin:8px 0 4px;">Últimas ejecuciones (${completed.length})</div>`;
+      html += `<div class="queue-section-label" style="margin-top:8px;">Completadas (${completed.length})</div>`;
       for (const task of completed.slice(0, 30)) {
         const statusClass = task.status === 'done' ? 'queue-done' : 'queue-failed';
         const time = (task.completedAt || task.startedAt || '').slice(11, 16);
@@ -503,6 +506,15 @@ async function renderQueue() {
   const resumeBtn = document.getElementById('resume-btn');
   const addTaskBtn = document.getElementById('add-task-btn');
   const saveConfigBtn = document.getElementById('save-config-btn');
+
+  // Wire collapsible config
+  const configToggle = document.getElementById('config-toggle');
+  const configBody = document.getElementById('config-body');
+  const configArrow = document.getElementById('config-arrow');
+  if (configToggle) configToggle.addEventListener('click', () => {
+    configBody.classList.toggle('open');
+    configArrow.classList.toggle('open');
+  });
 
   if (pauseBtn) pauseBtn.addEventListener('click', async () => { await ipcRenderer.invoke('pause-scheduler'); renderQueue(); });
   if (resumeBtn) resumeBtn.addEventListener('click', async () => { await ipcRenderer.invoke('resume-scheduler'); renderQueue(); });
