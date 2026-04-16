@@ -84,15 +84,12 @@ body { font-family:'Segoe UI',sans-serif; background:var(--bg); overflow:hidden;
 .ctx-mid { color:var(--yellow); background:rgba(224,175,104,.1); }
 .ctx-high { color:var(--red); background:rgba(247,118,142,.1); }
 .git-dirty { color:var(--yellow); background:rgba(224,175,104,.1); }
-.chip.update { background:rgba(224,175,104,.15); border-color:rgba(224,175,104,.3); border-left-color:var(--yellow); cursor:pointer; }
-.chip.setup { background:rgba(224,175,104,.15); border-color:rgba(224,175,104,.3); border-left-color:var(--yellow); cursor:pointer; }
+.chip.update, .chip.setup { background:rgba(224,175,104,.15); border-color:rgba(224,175,104,.3); border-left-color:var(--yellow); cursor:pointer; }
 
 /* ── Bar buttons ── */
-.close { background:none; border:none; color:var(--text-dim); font-size:14px; cursor:pointer; padding:4px 6px; border-radius:4px; -webkit-app-region:no-drag; transition:all .1s; line-height:1; }
+.bar-btn { background:none; border:none; color:var(--text-dim); font-size:14px; cursor:pointer; padding:4px 6px; border-radius:4px; -webkit-app-region:no-drag; transition:all .1s; line-height:1; }
 .close:hover { background:rgba(247,118,142,.15); color:var(--red); }
-.minimize-all { background:none; border:none; color:var(--text-dim); font-size:14px; cursor:pointer; padding:4px 6px; border-radius:4px; -webkit-app-region:no-drag; transition:all .1s; line-height:1; }
 .minimize-all:hover { background:rgba(224,175,104,.15); color:var(--yellow); }
-.gear { background:none; border:none; color:var(--text-dim); font-size:14px; cursor:pointer; padding:4px 6px; border-radius:4px; -webkit-app-region:no-drag; transition:all .1s; line-height:1; }
 .gear:hover { background:rgba(122,162,247,.15); color:var(--accent); }
 .gear.active { background:rgba(122,162,247,.12); color:var(--accent); }
 

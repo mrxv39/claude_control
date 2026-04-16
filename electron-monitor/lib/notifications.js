@@ -8,6 +8,7 @@
 const { BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { escapeHtml } = require('./utils');
 
 const prevStatus = new Map(); // cwd -> status
 const waitingSince = new Map(); // cwd -> 'BUSY' if WAITING streak started from BUSY
@@ -26,7 +27,7 @@ function showToast(message, onClick) {
     hasShadow: false,
     webPreferences: { nodeIntegration: false, contextIsolation: true }
   });
-  const safe = String(message).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  const safe = escapeHtml(message);
   const clickJs = onClick ? "onclick=\"document.title='clicked'\"" : '';
   const cursor = onClick ? 'cursor:pointer;' : '';
   toast.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`
@@ -49,6 +50,10 @@ function showToast(message, onClick) {
 }
 
 function checkStatusChanges(sessions, onFocus) {
+  // Prune maps of dead sessions
+  const liveCwds = new Set(sessions.filter(s => s.isClaude && s.cwd).map(s => s.cwd));
+  for (const cwd of prevStatus.keys()) if (!liveCwds.has(cwd)) { prevStatus.delete(cwd); waitingSince.delete(cwd); waitingCount.delete(cwd); }
+
   for (const s of sessions) {
     if (!s.isClaude || !s.cwd) continue;
     const prev = prevStatus.get(s.cwd);

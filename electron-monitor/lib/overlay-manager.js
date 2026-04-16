@@ -9,7 +9,7 @@
 const { BrowserWindow } = require('electron');
 const { IsWindow, IsWindowVisible, IsIconic, GetWindowRect, WindowFromPoint, GetAncestor } = require('./win32');
 
-const overlays = new Map(); // hwnd -> { win, label, status, offscreen }
+const overlays = new Map(); // hwnd -> { win, label, status, offscreen, lastX, lastY, lastW }
 const OVERLAY_H = 33;
 const OVERLAY_BTN_MARGIN = 140; // space for WT minimize/maximize/close buttons
 
@@ -18,8 +18,10 @@ let quitting = false;
 
 function setQuitting(val) { quitting = val; }
 
+const escapeHtml = require('./utils').escapeHtml;
+
 function overlayHtml(label, status) {
-  const safe = String(label).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  const safe = escapeHtml(label);
   const bg = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
   const border = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
   const textColor = status === 'BUSY' ? '#1a2e0a' : '#3a0a12';
@@ -101,7 +103,11 @@ function repositionOverlays() {
         continue;
       }
       const overlayW = Math.max(100, wWidth - OVERLAY_BTN_MARGIN);
-      info.win.setBounds({ x: r.left, y: r.top + 4, width: overlayW, height: OVERLAY_H });
+      const nx = r.left, ny = r.top + 4;
+      if (nx !== info.lastX || ny !== info.lastY || overlayW !== info.lastW) {
+        info.win.setBounds({ x: nx, y: ny, width: overlayW, height: OVERLAY_H });
+        info.lastX = nx; info.lastY = ny; info.lastW = overlayW;
+      }
       if (info.offscreen) { info.win.showInactive(); info.offscreen = false; }
     } catch {
       overlays.delete(h);

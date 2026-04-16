@@ -22,6 +22,9 @@ const {
   registerAppBar, unregisterAppBar
 } = win32;
 
+const SW_MINIMIZE = 6;
+const SW_RESTORE = 9;
+
 let mainWindow;
 let tray = null;
 let userPosition = null;   // { x, y } — set when user drags the bar
@@ -96,6 +99,46 @@ function createTray() {
   tray.setContextMenu(menu);
 }
 
+// ---- Shared helpers ----
+
+/** Collect visible, non-minimized WT window handles from enumWtWindows() result. */
+function getVisibleWtHwnds(wtWindows) {
+  const hwnds = [];
+  for (const [, wins] of wtWindows) {
+    for (const w of wins) {
+      if (w.hwnd && IsWindow(w.hwnd) && IsWindowVisible(w.hwnd) && !IsIconic(w.hwnd)) {
+        hwnds.push(w.hwnd);
+      }
+    }
+  }
+  return hwnds;
+}
+
+/** Compute grid layout and place windows. singleFull=true fills one window fully. */
+function tileHwnds(hwnds, { singleFull = false } = {}) {
+  const { screen } = require('electron');
+  const wa = screen.getPrimaryDisplay().workArea;
+  const n = hwnds.length;
+  if (n === 0) return;
+
+  let cols, rows;
+  if (n === 1)      { cols = singleFull ? 1 : 2; rows = 1; }
+  else if (n === 2) { cols = 2; rows = 1; }
+  else if (n === 3) { cols = 3; rows = 1; }
+  else if (n === 4) { cols = 2; rows = 2; }
+  else { cols = Math.ceil(Math.sqrt(n)); rows = Math.ceil(n / cols); }
+
+  const cellW = Math.floor(wa.width / cols);
+  const cellH = Math.floor(wa.height / rows);
+
+  hwnds.forEach((h, i) => {
+    const c = i % cols;
+    const r = Math.floor(i / cols);
+    ShowWindow(h, SW_RESTORE);
+    MoveWindow(h, wa.x + c * cellW, wa.y + r * cellH, cellW, cellH, true);
+  });
+}
+
 // ---- IPC: bar management ----
 ipcMain.handle('hide-bar', () => {
   if (!mainWindow) return;
@@ -104,22 +147,14 @@ ipcMain.handle('hide-bar', () => {
 });
 
 ipcMain.handle('minimize-all-wt', () => {
-  const minimized = [];
-  const wtWindows = enumWtWindows();
-  for (const [, wins] of wtWindows) {
-    for (const w of wins) {
-      if (w.hwnd && IsWindow(w.hwnd) && IsWindowVisible(w.hwnd) && !IsIconic(w.hwnd)) {
-        ShowWindow(w.hwnd, 6); // SW_MINIMIZE
-        minimized.push(w.hwnd);
-      }
-    }
-  }
-  return minimized;
+  const visible = getVisibleWtHwnds(enumWtWindows());
+  visible.forEach(h => ShowWindow(h, SW_MINIMIZE));
+  return visible;
 });
 
 ipcMain.handle('restore-wt', (ev, hwnds) => {
   for (const hwnd of hwnds) {
-    if (IsWindow(hwnd)) ShowWindow(hwnd, 9); // SW_RESTORE
+    if (IsWindow(hwnd)) ShowWindow(hwnd, SW_RESTORE);
   }
 });
 
@@ -156,7 +191,7 @@ ipcMain.handle('focus-wt', async (event, payload) => {
 
     if (targetHwnd && IsWindow(targetHwnd)) {
       if (lastFocusedViaChip === targetHwnd && !IsIconic(targetHwnd)) {
-        ShowWindow(targetHwnd, 6);
+        ShowWindow(targetHwnd, SW_MINIMIZE);
         lastFocusedViaChip = 0;
         return 'MINIMIZED';
       }
@@ -168,7 +203,7 @@ ipcMain.handle('focus-wt', async (event, payload) => {
     const hwnd = FindWindowA('CASCADIA_HOSTING_WINDOW_CLASS', null);
     if (!hwnd) return 'NO_WINDOW';
     if (lastFocusedViaChip === Number(hwnd) && !IsIconic(hwnd)) {
-      ShowWindow(hwnd, 6);
+      ShowWindow(hwnd, SW_MINIMIZE);
       lastFocusedViaChip = 0;
       return 'MINIMIZED';
     }
@@ -197,33 +232,7 @@ ipcMain.handle('tile-windows', async (event, hwnds) => {
     if (!Array.isArray(hwnds)) return 'BAD_INPUT';
     const valid = hwnds.map(Number).filter(h => h && IsWindow(h));
     if (valid.length === 0) return 'NO_HWNDS';
-
-    // workArea already excludes the AppBar-reserved space
-    const { screen } = require('electron');
-    const wa = screen.getPrimaryDisplay().workArea;
-    const x0 = wa.x;
-    const y0 = wa.y;
-    const w0 = wa.width;
-    const h0 = wa.height;
-
-    const n = valid.length;
-    let cols, rows;
-    if (n === 1)      { cols = 1; rows = 1; }
-    else if (n === 2) { cols = 2; rows = 1; }
-    else if (n === 3) { cols = 3; rows = 1; }
-    else if (n === 4) { cols = 2; rows = 2; }
-    else { cols = Math.ceil(Math.sqrt(n)); rows = Math.ceil(n / cols); }
-
-    const cellW = Math.floor(w0 / cols);
-    const cellH = Math.floor(h0 / rows);
-
-    valid.forEach((h, i) => {
-      const c = i % cols;
-      const r = Math.floor(i / cols);
-      ShowWindow(h, 9); // SW_RESTORE
-      MoveWindow(h, x0 + c * cellW, y0 + r * cellH, cellW, cellH, true);
-    });
-
+    tileHwnds(valid, { singleFull: true });
     valid.forEach(h => focusWindow(h));
     return 'OK';
   } catch (e) { return 'ERROR:' + e.message; }
@@ -233,39 +242,12 @@ ipcMain.handle('tile-windows', async (event, hwnds) => {
 let prevAutoTileHwnds = [];
 
 function autoTile(hwnds) {
-  const valid = hwnds.filter(h => h && IsWindow(h));
-  const sorted = [...valid].sort((a, b) => a - b);
+  const sorted = [...hwnds].sort((a, b) => a - b);
   if (sorted.length === prevAutoTileHwnds.length &&
       sorted.every((h, i) => h === prevAutoTileHwnds[i])) return;
   prevAutoTileHwnds = sorted;
-
   if (sorted.length === 0) return;
-
-  const { screen } = require('electron');
-  // workArea already excludes the AppBar-reserved space, no extra offset needed
-  const wa = screen.getPrimaryDisplay().workArea;
-  const x0 = wa.x;
-  const y0 = wa.y;
-  const w0 = wa.width;
-  const h0 = wa.height;
-
-  const n = sorted.length;
-  let cols, rows;
-  if (n === 1)      { cols = 2; rows = 1; }
-  else if (n === 2) { cols = 2; rows = 1; }
-  else if (n === 3) { cols = 3; rows = 1; }
-  else if (n === 4) { cols = 2; rows = 2; }
-  else { cols = Math.ceil(Math.sqrt(n)); rows = Math.ceil(n / cols); }
-
-  const cellW = Math.floor(w0 / cols);
-  const cellH = Math.floor(h0 / rows);
-
-  sorted.forEach((h, i) => {
-    const c = i % cols;
-    const r = Math.floor(i / cols);
-    ShowWindow(h, 9);
-    MoveWindow(h, x0 + c * cellW, y0 + r * cellH, cellW, cellH, true);
-  });
+  tileHwnds(sorted);
 }
 
 // ---- Get sessions (with HWND resolution + overlays + auto-tile) ----
@@ -335,16 +317,7 @@ ipcMain.handle('get-sessions', async () => {
       if (hwnd) focusWindow(hwnd);
     });
 
-    // Auto-tile using all visible WT windows
-    const allWtHwnds = [];
-    for (const [, wins] of wtWindows) {
-      for (const w of wins) {
-        if (w.hwnd && IsWindow(w.hwnd) && IsWindowVisible(w.hwnd) && !IsIconic(w.hwnd)) {
-          allWtHwnds.push(w.hwnd);
-        }
-      }
-    }
-    autoTile(allWtHwnds);
+    autoTile(getVisibleWtHwnds(wtWindows));
 
     return arr;
   } catch (e) { return []; }

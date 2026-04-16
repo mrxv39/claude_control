@@ -10,9 +10,9 @@
   <div class="chips" id="chips"></div>
   <span class="stats" id="stats"></span>
   <span id="idle-indicator" style="display:none;font-size:10px;color:#bb9af7;background:rgba(187,154,247,.15);padding:2px 6px;border-radius:3px;flex-shrink:0;-webkit-app-region:no-drag;" title="Ejecutando tareas automáticas"></span>
-  <button class="minimize-all" id="minimize-all-btn" title="Minimizar todas las consolas" aria-label="Minimizar todas las consolas">&#9644;</button>
-  <button class="gear" id="gear-btn" title="Panel del orquestador" aria-label="Abrir panel del orquestador">&#9881;</button>
-  <button class="close" id="close-btn" aria-label="Ocultar barra">✕</button>
+  <button class="bar-btn minimize-all" id="minimize-all-btn" title="Minimizar todas las consolas" aria-label="Minimizar todas las consolas">&#9644;</button>
+  <button class="bar-btn gear" id="gear-btn" title="Panel del orquestador" aria-label="Abrir panel del orquestador">&#9881;</button>
+  <button class="bar-btn close" id="close-btn" aria-label="Ocultar barra">✕</button>
 </div>
 <div class="panel" id="panel">
   <div class="panel-header">
@@ -34,6 +34,8 @@ const stats = document.getElementById('stats');
 
 const selected = new Set(); // hwnd values
 const gitCache = {}; // cwd -> { branch, dirty, recentCommits }
+const gitCacheTime = {}; // cwd -> timestamp of last fetch
+const GIT_CACHE_TTL = 30000; // 30s between git status refreshes per cwd
 
 function render(sessions) {
   chips.innerHTML = '';
@@ -162,13 +164,17 @@ function render(sessions) {
 
 async function refresh() {
   const sessions = await ipcRenderer.invoke('get-sessions');
-  // Update git cache in background (doesn't block render)
+  // Update git cache in background, throttled per cwd
+  const now = Date.now();
   const cwds = new Set(sessions.filter(s => s.cwd && s.cwd !== 'N/A').map(s => s.cwd));
   for (const cwd of cwds) {
     if (!gitCache[cwd]) gitCache[cwd] = { branch: null, dirty: 0, recentCommits: [] };
-    ipcRenderer.invoke('get-git-status', cwd).then(git => {
-      if (git) gitCache[cwd] = git;
-    }).catch(() => {});
+    if (!gitCacheTime[cwd] || now - gitCacheTime[cwd] > GIT_CACHE_TTL) {
+      gitCacheTime[cwd] = now;
+      ipcRenderer.invoke('get-git-status', cwd).then(git => {
+        if (git) gitCache[cwd] = git;
+      }).catch(() => {});
+    }
   }
   render(sessions);
   // Update status indicator (idle / capacity / auto)
@@ -282,6 +288,7 @@ async function loadTab(tab) {
 }
 
 let healthFilter = 'all'; // 'all', 'high', 'medium', 'low', 'ignored'
+let configSectionOpen = false;
 
 async function renderHealth() {
   const projects = await ipcRenderer.invoke('get-project-analysis');
@@ -528,11 +535,13 @@ async function renderQueue() {
   const addTaskBtn = document.getElementById('add-task-btn');
   const saveConfigBtn = document.getElementById('save-config-btn');
 
-  // Wire collapsible config
+  // Wire collapsible config (restore persisted state)
   const configToggle = document.getElementById('config-toggle');
   const configBody = document.getElementById('config-body');
   const configArrow = document.getElementById('config-arrow');
+  if (configSectionOpen && configBody) { configBody.classList.add('open'); configArrow.classList.add('open'); }
   if (configToggle) configToggle.addEventListener('click', () => {
+    configSectionOpen = !configSectionOpen;
     configBody.classList.toggle('open');
     configArrow.classList.toggle('open');
   });
@@ -675,8 +684,12 @@ async function renderExecLog() {
     html += `<span class="queue-cost">${esc(time)}</span>`;
     html += `</div>`;
   }
-  html += '<button class="scan-btn" style="margin-top:8px;" onclick="renderLog()">Volver</button>';
+  html += '<button class="scan-btn" style="margin-top:8px;" id="exec-back-btn">Volver</button>';
+  // Note: innerHTML is safe here — all dynamic values go through esc() (HTML entity escaping).
+  // This is a local Electron app with contextIsolation:false, no remote content.
   panelContent.innerHTML = html;
+  const backBtn = document.getElementById('exec-back-btn');
+  if (backBtn) backBtn.addEventListener('click', () => renderLog());
 }
 
 async function renderStats() {
