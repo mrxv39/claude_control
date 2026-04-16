@@ -39,7 +39,7 @@ Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 
 ## Convenciones del proyecto
 
-- **Tests**: `npm test` (vitest) en `electron-monitor/` — 13 tests para orchestrator-store. Módulos con FFI/Electron se verifican manualmente reiniciando la app.
+- **Tests**: `npm test` (vitest) en `electron-monitor/` — 69 tests en 4 archivos (orchestrator-store, scheduler, token-monitor, skill-analyzer). Módulos con FFI/Electron se verifican manualmente reiniciando la app.
 - **Reiniciar la app**: `Get-Process electron | Stop-Process -Force` y luego lanzar `npx electron .` desde `electron-monitor/`. Cuidado: `cmd /c` como padre muere si la shell padre cierra → usar `run_in_background` o `Start-Process` desacoplado.
 - **state files**: `~/.claude/claudio-state/<sha1-16char>.json`. Se pueden borrar para forzar re-captura del HWND.
 - **chime.wav**: se genera automáticamente en `~/.claude/claudio-state/chime.wav`. Borrar para regenerar.
@@ -55,7 +55,7 @@ Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 - **Stats tab**: gráfico de uso por ciclo 5h, costes (hoy/semana/mes), actividad por skill, heatmap de proyectos.
 - **Salud**: escanea `Desktop/proyectos`, score 1-10, checks locales gratis. Score se re-calcula tras cada tarea.
 - **Cola**: scheduler ejecuta skills en paralelo (2-3 tareas simultáneas en proyectos distintos), siempre en rama `claudio/auto/*`.
-- **10 Skills**: audit-claude-md, security-review, dep-update, simplify, add-tests, git-cleanup, ui-polish, supabase-audit, perf-audit, fix-types.
+- **15 Skills**: audit-claude-md, security-review, dep-update, simplify, add-tests, git-cleanup, ui-polish, supabase-audit, perf-audit, fix-types + 5 community (webapp-testing, frontend-design, trailofbits-security, pdf, ccusage).
 - **Modelos**: opus (security-review, simplify, add-tests, supabase-audit), sonnet (audit, dep-update, git-cleanup, ui-polish, perf-audit, fix-types).
 - **Pacing**: curva `progress^0.6 × 95%` para maximizar tokens del ciclo de 5h. Modos: burst (15s), accelerate (30s), pace (60s), coast (120s).
 - **Prioridades**: high (≤7d), medium (8-30d), low (31-90d, solo si high/medium no tienen skills disponibles), ignored (>90d).
