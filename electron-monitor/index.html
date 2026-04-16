@@ -84,7 +84,7 @@ function render(sessions) {
     if (s.hwnd && selected.has(s.hwnd)) d.classList.add('selected');
     const ctx = s.contextPercent || 0;
     d.title = `${s.project}\n${s.cwd || ''}\nEstado: ${s.status}\nContexto: ${ctx}%\nPID: ${s.pid}`;
-    const run = s.running !== '-' ? ` <span class="run">[${s.running}]</span>` : '';
+    const run = s.running !== '-' ? ` <span class="run">[${esc(s.running)}]</span>` : '';
 
     // Build main row with cached git badge
     const mainDiv = document.createElement('div');
@@ -94,14 +94,14 @@ function render(sessions) {
     if (cached && cached.branch) {
       const shortBranch = cached.branch.length > 16 ? cached.branch.slice(0, 15) + '\u2026' : cached.branch;
       const cls = cached.dirty > 0 ? 'git-badge git-dirty' : 'git-badge';
-      gitHtml = `<span class="${cls}" title="${cached.branch}">${shortBranch}${cached.dirty > 0 ? ' +' + cached.dirty : ''}</span>`;
+      gitHtml = `<span class="${cls}" title="${esc(cached.branch)}">${esc(shortBranch)}${cached.dirty > 0 ? ' +' + cached.dirty : ''}</span>`;
     }
     let ctxHtml = '';
     if (s.isClaude && ctx > 0) {
       const ctxCls = ctx < 50 ? 'ctx-low' : ctx < 80 ? 'ctx-mid' : 'ctx-high';
       ctxHtml = `<span class="ctx-badge ${ctxCls}">${ctx}%</span>`;
     }
-    mainDiv.innerHTML = `<span class="dot"></span><span class="name">${s.project}</span>${run}${gitHtml}${ctxHtml}`;
+    mainDiv.innerHTML = `<span class="dot"></span><span class="name">${esc(s.project)}</span>${run}${gitHtml}${ctxHtml}`;
     d.appendChild(mainDiv);
 
     // Context usage bar (only for Claude sessions)
@@ -225,7 +225,7 @@ ipcRenderer.on('update-available', (ev, version, url) => {
   upd.className = 'chip update';
   upd.innerHTML = `<div class="chip-main"><span class="name" style="color:#e0af68">Update ${version}</span></div>`;
   upd.title = 'Click para descargar la nueva version';
-  upd.addEventListener('click', () => { require('electron').shell.openExternal(url); });
+  upd.addEventListener('click', () => { if (url && url.startsWith('https://github.com/')) require('electron').shell.openExternal(url); });
   document.querySelector('.chips').prepend(upd);
 });
 

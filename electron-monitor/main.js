@@ -356,7 +356,9 @@ function setupStatusLine() {
     if (settings.statusLine && settings.statusLine.includes('statusline-writer') && !settings.statusLine.includes('\\\\\\\\')) return;
     const scriptPath = resolveScript('lib/statusline-writer.js');
     settings.statusLine = `node "${scriptPath}"`;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    const tmp = settingsPath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf-8');
+    fs.renameSync(tmp, settingsPath);
   } catch {}
 }
 
@@ -423,7 +425,12 @@ ipcMain.handle('toggle-panel', () => {
 });
 
 ipcMain.handle('get-orchestrator-config', () => store.load());
-ipcMain.handle('set-orchestrator-config', (ev, partial) => store.update(partial));
+ipcMain.handle('set-orchestrator-config', (ev, partial) => {
+  const allowed = ['workHours', 'dailyBudgetUsd', 'blacklist', 'idleEnabled', 'idleMinutes', 'capacityEnabled', 'capacityThreshold', 'pacingEnabled', 'pacingMaxTarget', 'pacingExponent', 'timezone'];
+  const safe = {};
+  for (const k of allowed) if (k in partial) safe[k] = partial[k];
+  return store.update(safe);
+});
 
 ipcMain.handle('get-project-analysis', () => store.getProjects());
 
