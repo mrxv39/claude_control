@@ -313,6 +313,16 @@ ipcMain.handle('get-sessions', async () => {
     const wtWindows = enumWtWindows();
     resolveHwnds(arr, wtWindows);
     overlayManager.syncOverlays(arr);
+
+    // Sync skill recommendation buttons on overlays
+    const config = store.load();
+    const recs = {};
+    for (const [name, proj] of Object.entries(config.projects || {})) {
+      const rec = scheduler.getRecommendedSkill(name, proj);
+      if (rec) recs[name] = { skill: rec.skill, projectPath: proj.path };
+    }
+    overlayManager.syncSkillButtons(arr, recs);
+
     notifications.checkStatusChanges(arr, ({ hwnd, tabIndex }) => {
       if (hwnd) focusWindow(hwnd);
     });
@@ -525,6 +535,9 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   overlayManager.startLoop();
+  overlayManager.onSkillClick((project, skill, projectPath) => {
+    store.enqueue({ project, skill, projectPath });
+  });
   appBarRegister();
   mainWindow.webContents.on('did-finish-load', () => {
     checkHookSetup();

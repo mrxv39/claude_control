@@ -109,6 +109,73 @@ function getProjectPriority(name, proj, config) {
   return 'ignored';
 }
 
+// Build ordered skill list per project: primary skills (matching score) first, then rest
+// Filters out inapplicable skills if applicableSkills analysis exists
+function getSkillsForProject(proj) {
+  const score = proj.score || 5;
+  let primaryRule = null;
+  for (const rule of SCORE_SKILLS) {
+    if (score <= rule.maxScore) { primaryRule = rule; break; }
+  }
+  if (!primaryRule) primaryRule = SCORE_SKILLS[SCORE_SKILLS.length - 1];
+  const primary = [...primaryRule.skills];
+  const seen = new Set(primary);
+  const secondary = [];
+  for (const rule of SCORE_SKILLS) {
+    if (rule === primaryRule) continue;
+    for (const s of rule.skills) {
+      if (!seen.has(s)) { secondary.push(s); seen.add(s); }
+    }
+  }
+  let allSkills = [...primary, ...secondary];
+  const applicable = proj.applicableSkills && proj.applicableSkills.skills;
+  if (applicable) {
+    allSkills = allSkills.filter(s => applicable[s] !== false);
+  }
+  return allSkills;
+}
+
+/**
+ * Get the single highest-impact skill recommendation for a project.
+ * Uses Claude's topSkill recommendation when available, falls back to heuristic score tiers.
+ */
+function getRecommendedSkill(name, proj) {
+  const config = store.load();
+  const priority = getProjectPriority(name, proj, config);
+  if (priority === 'ignored') return null;
+
+  const recentLog = store.readLog(100);
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+  const busySkills = new Set(
+    config.queue
+      .filter(t => t.project === name && (t.status === 'pending' || t.status === 'running'))
+      .map(t => t.skill)
+  );
+
+  function isAvailable(skill) {
+    if (!executor.SKILLS[skill]) return false;
+    if (busySkills.has(skill)) return false;
+    return !recentLog.some(
+      l => l.project === name && l.skill === skill &&
+           l.timestamp && (Date.now() - new Date(l.timestamp).getTime()) < SEVEN_DAYS
+    );
+  }
+
+  // Prefer Claude's topSkill recommendation if available and still valid
+  const analysis = proj.applicableSkills;
+  if (analysis && analysis.topSkill && analysis.method === 'claude') {
+    if (isAvailable(analysis.topSkill)) {
+      return { skill: analysis.topSkill, reason: analysis.topSkillReason || null };
+    }
+  }
+
+  // Fallback: heuristic score-tier ordering
+  for (const skill of getSkillsForProject(proj)) {
+    if (isAvailable(skill)) return { skill };
+  }
+  return null;
+}
+
 /**
  * Auto-enqueue tasks based on project priority and health scores.
  * @param {boolean} burstMode — if true, enqueue up to 10 tasks instead of 5
@@ -139,36 +206,6 @@ function autoEnqueue(burstMode = false) {
 
   // Read log once outside the loop
   const recentLog = store.readLog(100);
-
-  // Build ordered skill list per project: primary skills (matching score) first, then rest
-  // Filters out inapplicable skills if applicableSkills analysis exists
-  function getSkillsForProject(proj) {
-    const score = proj.score || 5;
-    // Find primary skills (first matching rule), then collect rest as secondary
-    let primaryRule = null;
-    for (const rule of SCORE_SKILLS) {
-      if (score <= rule.maxScore) { primaryRule = rule; break; }
-    }
-    if (!primaryRule) primaryRule = SCORE_SKILLS[SCORE_SKILLS.length - 1];
-    const primary = [...primaryRule.skills];
-    const seen = new Set(primary);
-    const secondary = [];
-    for (const rule of SCORE_SKILLS) {
-      if (rule === primaryRule) continue;
-      for (const s of rule.skills) {
-        if (!seen.has(s)) { secondary.push(s); seen.add(s); }
-      }
-    }
-    let allSkills = [...primary, ...secondary];
-
-    // Filter by applicability analysis if available
-    const applicable = proj.applicableSkills && proj.applicableSkills.skills;
-    if (applicable) {
-      allSkills = allSkills.filter(s => applicable[s] !== false);
-    }
-
-    return allSkills;
-  }
 
   // Helper: check if a project has any available (not recently ran) skill
   function hasAvailableSkill(name, proj) {
@@ -558,4 +595,4 @@ function getStatus() {
   };
 }
 
-module.exports = { start, stop, pause, resume, getStatus, autoEnqueue, getProjectPriority };
+module.exports = { start, stop, pause, resume, getStatus, autoEnqueue, getProjectPriority, getRecommendedSkill };

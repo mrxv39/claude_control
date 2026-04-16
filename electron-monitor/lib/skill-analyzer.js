@@ -168,7 +168,9 @@ For each skill, set true if this project would genuinely benefit from it, false 
 - "trailofbits-security": has crypto, authentication, or financial transaction code
 - "ccusage": uses Claude API or Anthropic SDK
 
-Return: {"skills":{"audit-claude-md":true,"security-review":false,...}}`;
+Also pick the ONE skill that would have the most impact right now for this project and explain why in one short sentence.
+
+Return: {"skills":{"audit-claude-md":true,"security-review":false,...},"topSkill":"skill-name","topSkillReason":"why this skill matters most"}`;
 
 function claudeAnalyze(projectPath) {
   return new Promise((resolve) => {
@@ -210,11 +212,16 @@ function claudeAnalyze(projectPath) {
         for (const s of ALL_SKILLS) {
           if (!(s in parsed.skills)) parsed.skills[s] = true;
         }
-        resolve({
+        const result = {
           skills: parsed.skills,
           analyzedAt: new Date().toISOString(),
           method: 'claude'
-        });
+        };
+        if (parsed.topSkill && ALL_SKILLS.includes(parsed.topSkill)) {
+          result.topSkill = parsed.topSkill;
+          if (parsed.topSkillReason) result.topSkillReason = parsed.topSkillReason;
+        }
+        resolve(result);
       } catch {
         resolve(null);
       }

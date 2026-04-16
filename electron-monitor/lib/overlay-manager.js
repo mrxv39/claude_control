@@ -10,13 +10,17 @@ const { BrowserWindow } = require('electron');
 const { IsWindow, IsWindowVisible, IsIconic, GetWindowRect, WindowFromPoint, GetAncestor } = require('./win32');
 
 const overlays = new Map(); // hwnd -> { win, label, status, offscreen, lastX, lastY, lastW }
+const skillOverlays = new Map(); // hwnd -> { win, skill, project, projectPath, offscreen, lastX, lastY }
 const OVERLAY_H = 33;
+const SKILL_BTN_W = 160;
 const OVERLAY_BTN_MARGIN = 140; // space for WT minimize/maximize/close buttons
 
 let pollTimer = null;
 let quitting = false;
+let onClickCb = null;
 
 function setQuitting(val) { quitting = val; }
+function onSkillClick(cb) { onClickCb = cb; }
 
 const escapeHtml = require('./utils').escapeHtml;
 
@@ -46,6 +50,74 @@ function createOverlay(hwnd, label, status) {
   win._ready = false;
   win.once('ready-to-show', () => { win._ready = true; win.showInactive(); });
   return win;
+}
+
+function skillButtonHtml(skill) {
+  const safe = escapeHtml(skill.length > 14 ? skill.slice(0, 13) + '\u2026' : skill);
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
+<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:'Segoe UI',sans-serif;cursor:pointer;">
+<div onclick="document.title='CLICK'" style="background:rgba(224,175,104,.85);color:#1a1b26;font-size:13px;font-weight:700;padding:5px 12px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe} \u25B6</div>
+</body></html>`);
+}
+
+function createSkillOverlay(hwnd, skill, project, projectPath) {
+  const win = new BrowserWindow({
+    width: SKILL_BTN_W, height: OVERLAY_H,
+    x: -9999, y: -9999,
+    frame: false, transparent: true, alwaysOnTop: true,
+    skipTaskbar: true, focusable: false, resizable: false,
+    hasShadow: false, show: false,
+    webPreferences: { nodeIntegration: false, contextIsolation: true }
+  });
+  // Clickeable (no ignoreMouseEvents) but not focusable (won't steal focus from WT)
+  win.loadURL(skillButtonHtml(skill));
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win._ready = false;
+  win.once('ready-to-show', () => { win._ready = true; win.showInactive(); });
+
+  // Detect button click via title change (reliable from data: URLs)
+  win.webContents.on('page-title-updated', (ev, title) => {
+    ev.preventDefault();
+    if (title === 'CLICK') {
+      if (onClickCb) onClickCb(project, skill, projectPath);
+      // Visual feedback: briefly change to hourglass
+      win.loadURL(skillButtonHtml('\u23F3'));
+      // Next syncSkillButtons cycle (3s) will update with next skill or remove
+    }
+  });
+
+  return win;
+}
+
+function syncSkillButtons(sessions, recommendations) {
+  const live = new Map();
+  for (const s of sessions) {
+    if (!s.hwnd || !IsWindow(s.hwnd)) continue;
+    const rec = recommendations[s.project];
+    if (rec) {
+      live.set(Number(s.hwnd), { project: s.project, skill: rec.skill, projectPath: rec.projectPath });
+    }
+  }
+
+  // Remove stale skill overlays
+  for (const [h, info] of skillOverlays) {
+    if (!live.has(h)) { try { info.win.destroy(); } catch {} skillOverlays.delete(h); }
+  }
+
+  // Create or update
+  for (const [h, data] of live) {
+    let info = skillOverlays.get(h);
+    if (!info) {
+      const win = createSkillOverlay(h, data.skill, data.project, data.projectPath);
+      info = { win, skill: data.skill, project: data.project, projectPath: data.projectPath, offscreen: true };
+      skillOverlays.set(h, info);
+    } else if (info.skill !== data.skill) {
+      info.win.loadURL(skillButtonHtml(data.skill));
+      info.skill = data.skill;
+      info.project = data.project;
+      info.projectPath = data.projectPath;
+    }
+  }
 }
 
 function syncOverlays(sessions) {
@@ -102,15 +174,37 @@ function repositionOverlays() {
         if (!info.offscreen) { info.win.hide(); info.offscreen = true; }
         continue;
       }
-      const overlayW = Math.max(100, wWidth - OVERLAY_BTN_MARGIN);
+      const hasSkillBtn = skillOverlays.has(h);
+      const overlayW = Math.max(100, wWidth - OVERLAY_BTN_MARGIN - (hasSkillBtn ? SKILL_BTN_W + 4 : 0));
       const nx = r.left, ny = r.top + 4;
       if (nx !== info.lastX || ny !== info.lastY || overlayW !== info.lastW) {
         info.win.setBounds({ x: nx, y: ny, width: overlayW, height: OVERLAY_H });
         info.lastX = nx; info.lastY = ny; info.lastW = overlayW;
       }
       if (info.offscreen) { info.win.showInactive(); info.offscreen = false; }
+
+      // Reposition skill button overlay alongside
+      const si = skillOverlays.get(h);
+      if (si && si.win && !si.win.isDestroyed()) {
+        if (si.win._ready) {
+          const sx = nx + overlayW + 4, sy = ny;
+          if (sx !== si.lastX || sy !== si.lastY) {
+            si.win.setBounds({ x: sx, y: sy, width: SKILL_BTN_W, height: OVERLAY_H });
+            si.lastX = sx; si.lastY = sy;
+          }
+          if (si.offscreen) { si.win.showInactive(); si.offscreen = false; }
+        }
+      }
     } catch {
       overlays.delete(h);
+    }
+  }
+
+  // Hide skill overlays for occluded/hidden parent windows
+  for (const [h, si] of skillOverlays) {
+    if (!si.win || si.win.isDestroyed()) { skillOverlays.delete(h); continue; }
+    if (!overlays.has(h) || (overlays.get(h).offscreen && !si.offscreen)) {
+      si.win.hide(); si.offscreen = true;
     }
   }
 }
@@ -129,6 +223,10 @@ function destroyAll() {
     try { if (info.win && !info.win.isDestroyed()) info.win.destroy(); } catch {}
   }
   overlays.clear();
+  for (const [, info] of skillOverlays) {
+    try { if (info.win && !info.win.isDestroyed()) info.win.destroy(); } catch {}
+  }
+  skillOverlays.clear();
 }
 
-module.exports = { syncOverlays, startLoop, stopLoop, destroyAll, setQuitting };
+module.exports = { syncOverlays, syncSkillButtons, startLoop, stopLoop, destroyAll, setQuitting, onSkillClick };
