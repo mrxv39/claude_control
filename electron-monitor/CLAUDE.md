@@ -4,29 +4,29 @@
 
 | Archivo | Líneas | Responsabilidad |
 |---------|--------|-----------------|
-| `main.js` | ~550 | App lifecycle, IPC handlers, window management, auto-tile |
-| `index.html` | ~790 | Renderer: chips, panel (4 tabs), canvas charts |
-| `styles.css` | ~110 | CSS con custom properties (`:root` vars) |
-| `lib/win32.js` | ~70 | koffi FFI bindings, enumWtWindows, focusWindow |
-| `lib/overlay-manager.js` | ~130 | Overlay BrowserWindows sobre cada WT |
-| `lib/notifications.js` | ~120 | Toast + chime + status change tracking |
-| `lib/orchestrator-store.js` | ~190 | Persistencia: orchestrator.json + log JSONL |
-| `lib/scheduler.js` | ~560 | Pacing, auto-enqueue, tick loop |
+| `main.js` | ~590 | App lifecycle, IPC handlers, window management, auto-tile |
+| `index.html` | ~840 | Renderer: chips, panel (4 tabs), canvas charts |
+| `styles.css` | ~230 | CSS con custom properties (`:root` vars) |
+| `lib/win32.js` | ~120 | koffi FFI bindings, enumWtWindows, focusWindow |
+| `lib/overlay-manager.js` | ~230 | Overlay BrowserWindows sobre cada WT |
+| `lib/notifications.js` | ~140 | Toast + chime + status change tracking |
+| `lib/orchestrator-store.js` | ~200 | Persistencia: orchestrator.json + log JSONL |
+| `lib/scheduler.js` | ~590 | Pacing, auto-enqueue, tick loop |
 | `lib/executor.js` | ~390 | Spawn `claude --print`, branch management |
 | `lib/skill-analyzer.js` | ~250 | Heuristic + Claude analysis de skills |
-| `lib/token-monitor.js` | ~250 | Rate limits, pacing decisions |
+| `lib/token-monitor.js` | ~300 | Rate limits, pacing decisions |
 | `lib/token-history.js` | ~100 | JSONL history por ciclo 5h |
 | `lib/stats-aggregator.js` | ~110 | Dashboard data aggregation |
-| `lib/project-scanner.js` | ~130 | Discover projects in configured dirs |
+| `lib/project-scanner.js` | ~120 | Discover projects in configured dirs |
 | `lib/project-analyzer.js` | ~140 | Health checks (git, deps, tests) |
 | `lib/git-status.js` | ~50 | Branch + dirty count per CWD |
-| `lib/conversation-reader.js` | ~160 | Read Claude JSONL for log display |
+| `lib/conversation-reader.js` | ~180 | Read Claude JSONL for log display |
 | `lib/statusline-writer.js` | ~80 | Write rate-limits.json for statusLine |
 
 ## Tests
 
 - Framework: **vitest** (`npm test` = `vitest run`)
-- Tests en `tests/orchestrator-store.test.js` (13 tests)
+- 69 tests en 4 archivos: orchestrator-store (14), scheduler (22), skill-analyzer (16), token-monitor (17)
 - Solo módulos de lógica pura (sin FFI/Electron)
 
 ## IPC Channels (main ↔ renderer)
