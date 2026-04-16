@@ -266,6 +266,10 @@ function getSessions() {
 }
 
 function resolveHwnds(arr, wtWindows) {
+  // Clear stale HWNDs that no longer point to a valid window
+  for (const s of arr) {
+    if (s.hwnd && !IsWindow(s.hwnd)) s.hwnd = 0;
+  }
   const needHwnd = arr.filter(s => !s.hwnd);
   if (needHwnd.length === 0) return;
   const knownHwnds = new Set(arr.filter(s => s.hwnd).map(s => Number(s.hwnd)));
@@ -315,13 +319,17 @@ ipcMain.handle('get-sessions', async () => {
     overlayManager.syncOverlays(arr);
 
     // Sync skill recommendation buttons on overlays
-    const config = store.load();
-    const recs = {};
-    for (const [name, proj] of Object.entries(config.projects || {})) {
-      const rec = scheduler.getRecommendedSkill(name, proj);
-      if (rec) recs[name] = { skill: rec.skill, projectPath: proj.path };
+    try {
+      const config = store.load();
+      const recs = {};
+      for (const [name, proj] of Object.entries(config.projects || {})) {
+        const rec = scheduler.getRecommendedSkill(name, proj);
+        if (rec) recs[name] = { skill: rec.skill, projectPath: proj.path };
+      }
+      overlayManager.syncSkillButtons(arr, recs);
+    } catch (skillErr) {
+      console.error('skillButtons error:', skillErr);
     }
-    overlayManager.syncSkillButtons(arr, recs);
 
     notifications.checkStatusChanges(arr, ({ hwnd, tabIndex }) => {
       if (hwnd) focusWindow(hwnd);
