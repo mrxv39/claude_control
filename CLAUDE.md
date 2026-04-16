@@ -21,6 +21,7 @@ Monitor visual + orquestador autónomo de sesiones Claude Code en Windows Termin
   - `token-history.js` — captura uso de tokens al final de cada ciclo 5h en JSONL
   - `stats-aggregator.js` — agregación de datos para el tab Stats del panel
   - `statusline-writer.js` — escribe rate-limits.json para statusLine hook
+  - `utils.js` — utilidades compartidas (escapeHtml)
 - **`SessionMonitor/`**, **`ClaudeSession/`** — módulos PowerShell antiguos (versión previa)
 - **`instrucciones.html`** — manual de usuario HTML standalone
 
@@ -38,7 +39,7 @@ Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 
 ## Convenciones del proyecto
 
-- **No hay tests automatizados** en este proyecto. La verificación es manual: reiniciar la app y observar.
+- **Tests**: `npm test` (vitest) en `electron-monitor/` — 13 tests para orchestrator-store. Módulos con FFI/Electron se verifican manualmente reiniciando la app.
 - **Reiniciar la app**: `Get-Process electron | Stop-Process -Force` y luego lanzar `npx electron .` desde `electron-monitor/`. Cuidado: `cmd /c` como padre muere si la shell padre cierra → usar `run_in_background` o `Start-Process` desacoplado.
 - **state files**: `~/.claude/claudio-state/<sha1-16char>.json`. Se pueden borrar para forzar re-captura del HWND.
 - **chime.wav**: se genera automáticamente en `~/.claude/claudio-state/chime.wav`. Borrar para regenerar.
