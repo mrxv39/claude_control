@@ -23,3 +23,6 @@ out/
 # Temp/backup
 *.bak
 *.tmp
+
+# Legacy SessionMonitor logs
+SessionMonitor/*_log.txt
