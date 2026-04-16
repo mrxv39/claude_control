@@ -28,6 +28,18 @@ let onStatusChange = null;
 let lastTickDebug = null;
 
 const STUCK_TIMEOUT = 6 * 60 * 1000; // 6 min — if task runs longer, force reset
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Check if a skill was recently executed (within 7 days) for a project.
+ */
+function wasRecentlyRun(project, skill, logEntries) {
+  const cutoff = Date.now() - SEVEN_DAYS_MS;
+  return logEntries.some(
+    l => l.project === project && l.skill === skill &&
+         l.timestamp && new Date(l.timestamp).getTime() > cutoff
+  );
+}
 
 // Priority order for auto-enqueue
 // Community skills (webapp-testing, frontend-design, trailofbits-security, pdf, ccusage)
@@ -145,7 +157,6 @@ function getRecommendedSkill(name, proj) {
   if (priority === 'ignored') return null;
 
   const recentLog = store.readLog(100);
-  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
   const busySkills = new Set(
     config.queue
       .filter(t => t.project === name && (t.status === 'pending' || t.status === 'running'))
@@ -155,10 +166,7 @@ function getRecommendedSkill(name, proj) {
   function isAvailable(skill) {
     if (!executor.SKILLS[skill]) return false;
     if (busySkills.has(skill)) return false;
-    return !recentLog.some(
-      l => l.project === name && l.skill === skill &&
-           l.timestamp && (Date.now() - new Date(l.timestamp).getTime()) < SEVEN_DAYS
-    );
+    return !wasRecentlyRun(name, skill, recentLog);
   }
 
   // Prefer Claude's topSkill recommendation if available and still valid
@@ -207,15 +215,10 @@ function autoEnqueue(burstMode = false) {
   // Read log once outside the loop
   const recentLog = store.readLog(100);
 
-  // Helper: check if a project has any available (not recently ran) skill
   function hasAvailableSkill(name, proj) {
-    return getSkillsForProject(proj).some(skill => {
-      if (!executor.SKILLS[skill]) return false;
-      return !recentLog.some(
-        l => l.project === name && l.skill === skill &&
-             l.timestamp && (Date.now() - new Date(l.timestamp).getTime()) < 7 * 24 * 60 * 60 * 1000
-      );
-    });
+    return getSkillsForProject(proj).some(skill =>
+      executor.SKILLS[skill] && !wasRecentlyRun(name, skill, recentLog)
+    );
   }
 
   // Only skip 'low' projects if high/medium actually have available skills
@@ -230,11 +233,7 @@ function autoEnqueue(burstMode = false) {
     const skills = getSkillsForProject(proj);
     for (const skill of skills) {
       if (enqueued >= maxEnqueue) break;
-      const recentlyRan = recentLog.some(
-        l => l.project === name && l.skill === skill &&
-             l.timestamp && (Date.now() - new Date(l.timestamp).getTime()) < 7 * 24 * 60 * 60 * 1000
-      );
-      if (recentlyRan) continue;
+      if (wasRecentlyRun(name, skill, recentLog)) continue;
 
       if (executor.SKILLS[skill]) {
         store.enqueue({
@@ -261,7 +260,7 @@ async function maybeRunSkillAnalysis(pacingAction) {
   const projects = config.projects;
   if (!projects) return;
 
-  const STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  const STALE_MS = SEVEN_DAYS_MS;
   const useClaude = (pacingAction === 'pace' || pacingAction === 'coast');
 
   for (const [name, proj] of Object.entries(projects)) {
@@ -364,10 +363,7 @@ async function tick() {
   const pacingAction = pacing ? pacing.action : 'wait';
 
   // Update tick interval based on pacing
-  const newInterval = tokenMonitor.getRecommendedInterval(pacingAction);
-  if (newInterval !== currentInterval) {
-    currentInterval = newInterval;
-  }
+  currentInterval = tokenMonitor.getRecommendedInterval(pacingAction);
 
   // Stale data guard: if data is stale and we're not in off-hours, wait
   if (pacing && pacing.cycle && pacing.cycle.isStale && !outsideHours) {
@@ -420,12 +416,8 @@ async function tick() {
 
   // Select up to MAX_PARALLEL tasks on DIFFERENT projects
   const tasks = [];
-  const selectedProjects = new Set();
+  const excludePaths = new Set(busyPaths); // grows as we pick tasks
   for (let i = 0; i < MAX_PARALLEL; i++) {
-    // Exclude already-selected projects (one task per project per tick)
-    const excludePaths = new Set([...busyPaths]);
-    selectedProjects.forEach(p => excludePaths.add(p));
-
     let task = selectTask(pacingAction, excludePaths);
     if (!task && i === 0) {
       const n = autoEnqueue(isBurst);
@@ -436,7 +428,7 @@ async function tick() {
     }
     if (!task) break;
     tasks.push(task);
-    selectedProjects.add(task.projectPath);
+    excludePaths.add(task.projectPath);
   }
 
   if (tasks.length === 0) {
