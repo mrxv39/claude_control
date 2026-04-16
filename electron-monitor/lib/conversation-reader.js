@@ -18,27 +18,43 @@ function cwdToProjectDir(cwd) {
   return cwd.replace(/:\\/g, '--').replace(/[\\/]/g, '-').replace(/_/g, '-');
 }
 
+// Cache for findSessionFile — avoids re-statting all JSONL files per cwd per call
+const _sessionFileCache = new Map(); // cwd -> { path, at }
+const SESSION_FILE_CACHE_TTL = 10 * 1000; // 10s
+
 /**
  * Find the most recent JSONL session file for a cwd.
+ * Cached for 10s per cwd to avoid repeated statSync on all JSONL files.
  */
 function findSessionFile(cwd) {
+  const now = Date.now();
+  const cached = _sessionFileCache.get(cwd);
+  if (cached && (now - cached.at) < SESSION_FILE_CACHE_TTL) return cached.path;
+
   const dirName = cwdToProjectDir(cwd);
   const projectDir = path.join(CLAUDE_DIR, dirName);
 
-  if (!fs.existsSync(projectDir)) return null;
+  if (!fs.existsSync(projectDir)) {
+    _sessionFileCache.set(cwd, { path: null, at: now });
+    return null;
+  }
 
   try {
     const files = fs.readdirSync(projectDir)
       .filter(f => f.endsWith('.jsonl'))
-      .map(f => ({
-        name: f,
-        path: path.join(projectDir, f),
-        mtime: fs.statSync(path.join(projectDir, f)).mtimeMs
-      }))
+      .map(f => {
+        const full = path.join(projectDir, f);
+        try { return { path: full, mtime: fs.statSync(full).mtimeMs }; }
+        catch { return null; }
+      })
+      .filter(Boolean)
       .sort((a, b) => b.mtime - a.mtime);
 
-    return files.length > 0 ? files[0].path : null;
+    const result = files.length > 0 ? files[0].path : null;
+    _sessionFileCache.set(cwd, { path: result, at: now });
+    return result;
   } catch {
+    _sessionFileCache.set(cwd, { path: null, at: now });
     return null;
   }
 }

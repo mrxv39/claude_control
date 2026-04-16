@@ -11,13 +11,28 @@ const path = require('path');
 const PROJECTS_DIR = path.join(process.env.USERPROFILE, '.claude', 'projects');
 const RATE_LIMITS_PATH = path.join(process.env.USERPROFILE, '.claude', 'claudio-state', 'rate-limits.json');
 
+// Cache for getLastUserActivity — avoids rescanning all JSONL dirs on every tick
+let _activityCache = { ts: null, at: 0 };
+const ACTIVITY_CACHE_TTL = 30 * 1000; // 30s — idle detection doesn't need sub-second precision
+
 /**
  * Get the timestamp of the most recent user message across all sessions.
  * Reads the tail of each JSONL file looking for "type":"user" entries.
  * Returns Date or null if no recent activity found.
+ *
+ * Results are cached for 30s to avoid rescanning all JSONL dirs on every
+ * scheduler tick (the scan reads directories + file tails across all projects).
  */
 function getLastUserActivity() {
-  if (!fs.existsSync(PROJECTS_DIR)) return null;
+  const now = Date.now();
+  if (_activityCache.at && (now - _activityCache.at) < ACTIVITY_CACHE_TTL) {
+    return _activityCache.ts;
+  }
+
+  if (!fs.existsSync(PROJECTS_DIR)) {
+    _activityCache = { ts: null, at: now };
+    return null;
+  }
 
   let latestTs = null;
 
@@ -32,8 +47,15 @@ function getLastUserActivity() {
         jsonlFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
       } catch { continue; }
 
+      // Only check files modified in the last hour (skip stale sessions)
+      const cutoff = now - 60 * 60 * 1000;
       for (const file of jsonlFiles) {
         const filePath = path.join(dirPath, file);
+        try {
+          const stat = fs.statSync(filePath);
+          if (stat.mtimeMs < cutoff) continue;
+        } catch { continue; }
+
         const ts = getLastUserTimestampFromFile(filePath);
         if (ts && (!latestTs || ts > latestTs)) {
           latestTs = ts;
@@ -42,6 +64,7 @@ function getLastUserActivity() {
     }
   } catch {}
 
+  _activityCache = { ts: latestTs, at: now };
   return latestTs;
 }
 
@@ -100,23 +123,28 @@ function getIdleMinutes() {
  * Uses both JSONL timestamps AND file modification times for reliability.
  */
 function isUserIdle(minutes = 15) {
-  // Primary: check JSONL user messages
+  // Primary: check JSONL user messages (cached, cheap after first call)
   const idleTime = getIdleMinutes();
   if (idleTime < minutes) return false;
 
-  // Secondary: check if any JSONL was modified recently (user might be mid-prompt)
+  // Secondary: check if any JSONL was modified in the last 2 min (user mid-prompt).
+  // Only scan recently-modified dirs to avoid full directory walk.
   try {
     const projectDirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory());
 
+    const cutoff = Date.now() - 2 * 60 * 1000;
     for (const dir of projectDirs) {
       const dirPath = path.join(PROJECTS_DIR, dir.name);
       try {
+        // Quick check: if the directory itself wasn't modified recently, skip it
+        const dirStat = fs.statSync(dirPath);
+        if (dirStat.mtimeMs < cutoff) continue;
+
         const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
         for (const file of files) {
           const stat = fs.statSync(path.join(dirPath, file));
-          const fileAge = (Date.now() - stat.mtimeMs) / (60 * 1000);
-          if (fileAge < 2) return false; // file modified in last 2 min → not idle
+          if (stat.mtimeMs > cutoff) return false; // file modified in last 2 min → not idle
         }
       } catch {}
     }
@@ -125,20 +153,37 @@ function isUserIdle(minutes = 15) {
   return true;
 }
 
+// Cache for getRateLimits — file is only written every ~10s by statusline hook
+let _rateLimitsCache = { data: null, at: 0 };
+const RATE_LIMITS_CACHE_TTL = 5 * 1000; // 5s — sufficient since file updates every ~10s
+
 /**
  * Read rate limits from the shared file written by statusline-writer.js.
  * Returns { fiveHour: { usedPercent, resetsAt }, sevenDay: { usedPercent, resetsAt }, updatedAt }
  * or null if no data available.
  */
 function getRateLimits() {
+  const now = Date.now();
+  if (_rateLimitsCache.at && (now - _rateLimitsCache.at) < RATE_LIMITS_CACHE_TTL) {
+    return _rateLimitsCache.data;
+  }
+
   try {
-    if (!fs.existsSync(RATE_LIMITS_PATH)) return null;
+    if (!fs.existsSync(RATE_LIMITS_PATH)) {
+      _rateLimitsCache = { data: null, at: now };
+      return null;
+    }
     const raw = fs.readFileSync(RATE_LIMITS_PATH, 'utf-8');
     const data = JSON.parse(raw);
     // Consider stale if older than 10 minutes
-    if (data.updatedAt && (Date.now() - data.updatedAt) > 10 * 60 * 1000) return null;
+    if (data.updatedAt && (now - data.updatedAt) > 10 * 60 * 1000) {
+      _rateLimitsCache = { data: null, at: now };
+      return null;
+    }
+    _rateLimitsCache = { data, at: now };
     return data;
   } catch {
+    _rateLimitsCache = { data: null, at: now };
     return null;
   }
 }
