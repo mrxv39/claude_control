@@ -488,9 +488,17 @@ function buildConfigSectionHtml(status, config) {
 }
 
 async function renderQueue() {
-  const queue = await ipcRenderer.invoke('get-queue');
-  const status = await ipcRenderer.invoke('get-scheduler-status');
-  const config = await ipcRenderer.invoke('get-orchestrator-config');
+  let queue, status, config;
+  try {
+    [queue, status, config] = await Promise.all([
+      ipcRenderer.invoke('get-queue'),
+      ipcRenderer.invoke('get-scheduler-status'),
+      ipcRenderer.invoke('get-orchestrator-config'),
+    ]);
+  } catch {
+    panelContent.textContent = 'Error al cargar datos de la cola.';
+    return;
+  }
 
   let html = buildSchedulerHeaderHtml(status);
   html += buildConfigSectionHtml(status, config);
@@ -650,7 +658,8 @@ async function renderLog() {
 
   // Show conversation log if session selected
   if (selectedSessionCwd) {
-    const entries = await ipcRenderer.invoke('get-session-log', selectedSessionCwd);
+    let entries = [];
+    try { entries = await ipcRenderer.invoke('get-session-log', selectedSessionCwd); } catch {}
     if (!entries.length) {
       html += '<div class="empty-msg">No hay datos de conversación para esta sesión.</div>';
     } else {

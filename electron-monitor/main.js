@@ -160,9 +160,11 @@ ipcMain.handle('restore-wt', (ev, hwnds) => {
 
 ipcMain.handle('resize-bar', (event, w) => {
   if (!mainWindow) return;
+  const n = Number(w);
+  if (!Number.isFinite(n)) return;
   const { screen } = require('electron');
   const bounds = screen.getPrimaryDisplay().bounds;
-  const width = Math.max(180, Math.min(Math.ceil(w), bounds.width));
+  const width = Math.max(180, Math.min(Math.ceil(n), bounds.width));
   const [, h] = mainWindow.getSize();
 
   // Bar always stays at top of screen (y=0), only x changes
