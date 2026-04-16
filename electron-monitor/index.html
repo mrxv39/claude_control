@@ -12,7 +12,7 @@
   <span id="idle-indicator" style="display:none;font-size:10px;color:#bb9af7;background:rgba(187,154,247,.15);padding:2px 6px;border-radius:3px;flex-shrink:0;-webkit-app-region:no-drag;" title="Ejecutando tareas automáticas"></span>
   <button class="minimize-all" id="minimize-all-btn" title="Minimizar todas las consolas" aria-label="Minimizar todas las consolas">&#9644;</button>
   <button class="gear" id="gear-btn" title="Panel del orquestador" aria-label="Abrir panel del orquestador">&#9881;</button>
-  <button class="close" onclick="if(panel.classList.contains('open')){togglePanel();}else{ipcRenderer.invoke('hide-bar');}" aria-label="Ocultar barra">✕</button>
+  <button class="close" id="close-btn" aria-label="Ocultar barra">✕</button>
 </div>
 <div class="panel" id="panel">
   <div class="panel-header">
@@ -238,6 +238,10 @@ async function togglePanel() {
 }
 gearBtn.addEventListener('click', togglePanel);
 document.getElementById('panel-close-btn').addEventListener('click', togglePanel);
+document.getElementById('close-btn').addEventListener('click', () => {
+  if (panel.classList.contains('open')) togglePanel();
+  else ipcRenderer.invoke('hide-bar');
+});
 const minBtn = document.getElementById('minimize-all-btn');
 let minimizedHwnds = [];
 minBtn.addEventListener('click', async () => {

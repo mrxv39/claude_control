@@ -28,6 +28,9 @@ let userPosition = null;   // { x, y } — set when user drags the bar
 let isSettingBounds = false; // suppress 'move' during programmatic setBounds
 let isQuitting = false;
 
+function appBarRegister() { try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch {} }
+function appBarUnregister() { try { unregisterAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0)); } catch {} }
+
 function createWindow() {
   const { screen } = require('electron');
   const bounds = screen.getPrimaryDisplay().bounds;
@@ -85,9 +88,7 @@ function createTray() {
   const menu = Menu.buildFromTemplate([
     { label: 'Mostrar', click: () => {
       mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver');
-      if (!panelOpen) {
-        try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch {}
-      }
+      if (!panelOpen) appBarRegister();
     } },
     { type: 'separator' },
     { label: 'Salir', click: () => { isQuitting = true; app.quit(); } }
@@ -98,7 +99,7 @@ function createTray() {
 // ---- IPC: bar management ----
 ipcMain.handle('hide-bar', () => {
   if (!mainWindow) return;
-  try { unregisterAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0)); } catch {}
+  appBarUnregister();
   mainWindow.hide();
 });
 
@@ -282,11 +283,9 @@ function getSessions() {
   });
 }
 
-function resolveHwnds(arr) {
+function resolveHwnds(arr, wtWindows) {
   const needHwnd = arr.filter(s => !s.hwnd);
   if (needHwnd.length === 0) return;
-
-  const wtWindows = enumWtWindows();
   const knownHwnds = new Set(arr.filter(s => s.hwnd).map(s => Number(s.hwnd)));
   const unassigned = [];
   for (const [, wins] of wtWindows) {
@@ -329,16 +328,16 @@ ipcMain.handle('get-sessions', async () => {
     const arr = await getSessions();
     if (arr.length === 0) { overlayManager.syncOverlays([]); return []; }
 
-    resolveHwnds(arr);
+    const wtWindows = enumWtWindows();
+    resolveHwnds(arr, wtWindows);
     overlayManager.syncOverlays(arr);
     notifications.checkStatusChanges(arr, ({ hwnd, tabIndex }) => {
       if (hwnd) focusWindow(hwnd);
     });
 
     // Auto-tile using all visible WT windows
-    const wtWindows2 = enumWtWindows();
     const allWtHwnds = [];
-    for (const [, wins] of wtWindows2) {
+    for (const [, wins] of wtWindows) {
       for (const w of wins) {
         if (w.hwnd && IsWindow(w.hwnd) && IsWindowVisible(w.hwnd) && !IsIconic(w.hwnd)) {
           allWtHwnds.push(w.hwnd);
@@ -422,8 +421,7 @@ ipcMain.handle('toggle-panel', () => {
   const wa = screen.getPrimaryDisplay().workArea;
 
   if (panelOpen) {
-    // Unregister AppBar while panel is open (bar is no longer a thin top strip)
-    try { unregisterAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0)); } catch {}
+    appBarUnregister();
 
     const [bx, by] = mainWindow.getPosition();
     const [bw] = mainWindow.getSize();
@@ -446,8 +444,7 @@ ipcMain.handle('toggle-panel', () => {
     mainWindow.setResizable(false);
     mainWindow.setAlwaysOnTop(true, 'screen-saver');
     barBoundsBeforePanel = null;
-    // Re-register AppBar now that the bar is back to thin strip
-    try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch {}
+    appBarRegister();
   }
   return panelOpen;
 });
@@ -540,9 +537,7 @@ if (!gotLock) {
 app.on('second-instance', () => {
   if (mainWindow) {
     mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver');
-    if (!panelOpen) {
-      try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch {}
-    }
+    if (!panelOpen) appBarRegister();
   }
 });
 
@@ -550,11 +545,7 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   overlayManager.startLoop();
-  // Register as AppBar so maximized apps don't go behind the bar
-  try {
-    const nativeHwnd = mainWindow.getNativeWindowHandle().readInt32LE(0);
-    registerAppBar(nativeHwnd, BAR_H);
-  } catch (e) { console.error('AppBar registration failed:', e.message); }
+  appBarRegister();
   mainWindow.webContents.on('did-finish-load', () => {
     checkHookSetup();
     setupStatusLine();
@@ -588,11 +579,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
 app.on('before-quit', () => {
   isQuitting = true;
-  // Unregister AppBar to restore work area
-  try {
-    const nativeHwnd = mainWindow.getNativeWindowHandle().readInt32LE(0);
-    unregisterAppBar(nativeHwnd);
-  } catch {}
+  appBarUnregister();
   overlayManager.setQuitting(true);
   scheduler.stop();
   overlayManager.stopLoop();

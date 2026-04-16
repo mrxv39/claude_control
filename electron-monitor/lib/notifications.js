@@ -117,7 +117,9 @@ function generateChimeWav() {
 }
 
 let chimePath = null;
+let chimeInProgress = false;
 function playChime() {
+  if (chimeInProgress) return;
   try {
     if (!chimePath) {
       const tmpDir = path.join(process.env.USERPROFILE, '.claude', 'claudio-state');
@@ -126,10 +128,11 @@ function playChime() {
         fs.writeFileSync(chimePath, generateChimeWav());
       }
     }
+    chimeInProgress = true;
     require('child_process').execFile('powershell.exe',
       ['-NoProfile', '-Command', `(New-Object Media.SoundPlayer '${chimePath.replace(/'/g, "''")}').PlaySync()`],
-      { timeout: 5000 }, () => {});
-  } catch {}
+      { timeout: 5000 }, () => { chimeInProgress = false; });
+  } catch { chimeInProgress = false; }
 }
 
 module.exports = { checkStatusChanges, showToast, playChime };
