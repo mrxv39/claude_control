@@ -37,6 +37,15 @@ const gitCache = {}; // cwd -> { branch, dirty, recentCommits }
 const gitCacheTime = {}; // cwd -> timestamp of last fetch
 const GIT_CACHE_TTL = 30000; // 30s between git status refreshes per cwd
 
+function esc(str) { return String(str || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+
+const COLORS = {
+  green: '#9ece6a', yellow: '#e0af68', red: '#f7768e', blue: '#7aa2f7', purple: '#bb9af7', dim: '#565f89',
+  priority: { high: '#9ece6a', medium: '#e0af68', low: '#7aa2f7', ignored: '#565f89' },
+  pacing: { pace: '#9ece6a', accelerate: '#7aa2f7', burst: '#e0af68', coast: '#f7768e', wait: '#565f89' },
+};
+function rateColor(pct) { return pct < 50 ? COLORS.green : pct < 80 ? COLORS.yellow : COLORS.red; }
+
 function render(sessions) {
   chips.innerHTML = '';
   if (!sessions.length) { chips.innerHTML = '<span class="run">No sessions</span>'; stats.textContent = ''; return; }
@@ -106,7 +115,7 @@ function render(sessions) {
 
     // Context usage bar (only for Claude sessions)
     if (s.isClaude && ctx > 0) {
-      const barColor = ctx < 50 ? '#9ece6a' : ctx < 80 ? '#e0af68' : '#f7768e';
+      const barColor = rateColor(ctx);
       const bar = document.createElement('div');
       bar.className = 'ctx-bar';
       bar.innerHTML = `<div class="ctx-fill" style="width:${Math.min(ctx,100)}%;background:${barColor}"></div>`;
@@ -184,7 +193,7 @@ async function refresh() {
     if (sched.rateLimits) {
       const pct = Math.round(sched.rateLimits.fiveHour.usedPercent);
       const p = sched.pacingDecision;
-      const color = pct < 50 ? '#9ece6a' : pct < 80 ? '#e0af68' : '#f7768e';
+      const color = rateColor(pct);
       let label = `5h:${pct}%`;
       if (p && p.targetUsage !== undefined) label += `→${Math.round(p.targetUsage)}%`;
       if (p && p.action === 'burst') label += ' BURST';
@@ -290,6 +299,46 @@ async function loadTab(tab) {
 let healthFilter = 'all'; // 'all', 'high', 'medium', 'low', 'ignored'
 let configSectionOpen = false;
 
+function buildProjectCard(name, proj, priorities, config) {
+  const s = proj.score || 5;
+  const scoreClass = s >= 7 ? 'score-high' : s >= 4 ? 'score-mid' : 'score-low';
+  const checks = proj.checks || {};
+  const prio = priorities[name] || 'ignored';
+  const prioColor = COLORS.priority[prio] || COLORS.dim;
+  const isOverride = (config.priorityOverrides || {})[name] ? true : false;
+
+  let h = `<div class="project-card" style="${prio === 'ignored' ? 'opacity:.5;' : ''}">`;
+  h += `<div class="project-card-header">`;
+  h += `<span class="project-card-name">${esc(name)}</span>`;
+  h += `<select class="prio-select" data-project="${esc(name)}" style="font-size:10px;padding:1px 4px;border-radius:3px;border:1px solid ${prioColor}44;background:${prioColor}22;color:${prioColor};cursor:pointer;${isOverride ? 'font-weight:700;' : ''}">`;
+  h += `<option value="high"${prio === 'high' ? ' selected' : ''}>ALTA</option>`;
+  h += `<option value="medium"${prio === 'medium' ? ' selected' : ''}>MEDIA</option>`;
+  h += `<option value="low"${prio === 'low' ? ' selected' : ''}>BAJA</option>`;
+  h += `<option value="ignored"${prio === 'ignored' ? ' selected' : ''}>IGNORADO</option>`;
+  if (isOverride) h += `<option value="auto">AUTO</option>`;
+  h += `</select>`;
+  h += `<span class="project-card-stack">${esc(proj.stack || '?')}</span>`;
+  h += `<span class="score-badge ${scoreClass}">${s}/10</span>`;
+  h += `</div>`;
+
+  h += `<div class="check-row">`;
+  h += checkBadge('CLAUDE.md', checks.hasClaude);
+  h += checkBadge('.gitignore', checks.hasGitignore);
+  h += checkBadge('Tests', checks.hasTests);
+  h += checkBadge('Git limpio', checks.gitClean);
+  h += checkBadge('Deps ok', checks.depsOk);
+  if (checks.lastCommitDays !== null && checks.lastCommitDays !== undefined) {
+    h += `<span class="check ${checks.lastCommitDays <= 7 ? 'check-ok' : checks.lastCommitDays > 30 ? 'check-fail' : 'check-na'}">${checks.lastCommitDays}d</span>`;
+  }
+  h += `</div>`;
+
+  if (proj.suggestions && proj.suggestions.length) {
+    for (const sug of proj.suggestions) h += `<div class="suggestion">${esc(sug)}</div>`;
+  }
+  h += `</div>`;
+  return h;
+}
+
 async function renderHealth() {
   const projects = await ipcRenderer.invoke('get-project-analysis');
   const priorities = await ipcRenderer.invoke('get-project-priorities');
@@ -337,46 +386,7 @@ async function renderHealth() {
   html += '</div>';
 
   for (const [name, proj] of filtered) {
-    const s = proj.score || 5;
-    const scoreClass = s >= 7 ? 'score-high' : s >= 4 ? 'score-mid' : 'score-low';
-    const checks = proj.checks || {};
-    const prio = priorities[name] || 'ignored';
-    const prioColor = prio === 'high' ? '#9ece6a' : prio === 'medium' ? '#e0af68' : prio === 'low' ? '#7aa2f7' : '#565f89';
-    const isOverride = (config.priorityOverrides || {})[name] ? true : false;
-
-    html += `<div class="project-card" style="${prio === 'ignored' ? 'opacity:.5;' : ''}">`;
-    html += `<div class="project-card-header">`;
-    html += `<span class="project-card-name">${esc(name)}</span>`;
-    html += `<select class="prio-select" data-project="${esc(name)}" style="font-size:10px;padding:1px 4px;border-radius:3px;border:1px solid ${prioColor}44;background:${prioColor}22;color:${prioColor};cursor:pointer;${isOverride ? 'font-weight:700;' : ''}">`;
-    html += `<option value="high"${prio === 'high' ? ' selected' : ''}>ALTA</option>`;
-    html += `<option value="medium"${prio === 'medium' ? ' selected' : ''}>MEDIA</option>`;
-    html += `<option value="low"${prio === 'low' ? ' selected' : ''}>BAJA</option>`;
-    html += `<option value="ignored"${prio === 'ignored' ? ' selected' : ''}>IGNORADO</option>`;
-    if (isOverride) html += `<option value="auto">AUTO</option>`;
-    html += `</select>`;
-    html += `<span class="project-card-stack">${esc(proj.stack || '?')}</span>`;
-    html += `<span class="score-badge ${scoreClass}">${s}/10</span>`;
-    html += `</div>`;
-
-    // Checks row
-    html += `<div class="check-row">`;
-    html += checkBadge('CLAUDE.md', checks.hasClaude);
-    html += checkBadge('.gitignore', checks.hasGitignore);
-    html += checkBadge('Tests', checks.hasTests);
-    html += checkBadge('Git limpio', checks.gitClean);
-    html += checkBadge('Deps ok', checks.depsOk);
-    if (checks.lastCommitDays !== null && checks.lastCommitDays !== undefined) {
-      html += `<span class="check ${checks.lastCommitDays <= 7 ? 'check-ok' : checks.lastCommitDays > 30 ? 'check-fail' : 'check-na'}">${checks.lastCommitDays}d</span>`;
-    }
-    html += `</div>`;
-
-    // Suggestions
-    if (proj.suggestions && proj.suggestions.length) {
-      for (const sug of proj.suggestions) {
-        html += `<div class="suggestion">${esc(sug)}</div>`;
-      }
-    }
-    html += `</div>`;
+    html += buildProjectCard(name, proj, priorities, config);
   }
 
   panelContent.innerHTML = html;
@@ -409,14 +419,7 @@ async function startScan() {
   }
 }
 
-async function renderQueue() {
-  const queue = await ipcRenderer.invoke('get-queue');
-  const status = await ipcRenderer.invoke('get-scheduler-status');
-  const config = await ipcRenderer.invoke('get-orchestrator-config');
-
-  let html = '';
-
-  // Scheduler status header — prominent, always visible
+function buildSchedulerHeaderHtml(status) {
   const stateColor = status.paused ? 'var(--red)' : status.outsideWorkHours ? 'var(--green)' : 'var(--yellow)';
   const stateLabel = status.paused ? 'PAUSADO' :
                      status.running ? 'EJECUTANDO' :
@@ -425,60 +428,72 @@ async function renderQueue() {
                       status.running ? '' :
                       status.outsideWorkHours ? 'fuera de horario' : 'horario laboral';
   const rl = status.rateLimits;
-  const p = status.pacingDecision;
   const rlStr = rl ? `5h: ${rl.fiveHour.usedPercent}%` : '';
-  html += `<div class="sched-header">`;
-  html += `<div class="sched-dot" style="background:${stateColor};box-shadow:0 0 8px ${stateColor}44;"></div>`;
-  html += `<div>`;
-  html += `<div class="sched-label" style="color:${stateColor};">${stateLabel}</div>`;
-  html += `<div class="sched-meta">${stateDetail}${stateDetail && rlStr ? ' · ' : ''}${rlStr}</div>`;
-  html += `</div>`;
-  html += `<div class="sched-actions">`;
+  let h = `<div class="sched-header">`;
+  h += `<div class="sched-dot" style="background:${stateColor};box-shadow:0 0 8px ${stateColor}44;"></div>`;
+  h += `<div>`;
+  h += `<div class="sched-label" style="color:${stateColor};">${stateLabel}</div>`;
+  h += `<div class="sched-meta">${stateDetail}${stateDetail && rlStr ? ' · ' : ''}${rlStr}</div>`;
+  h += `</div>`;
+  h += `<div class="sched-actions">`;
   if (status.paused) {
-    html += `<button class="scan-btn" id="resume-btn">Reanudar</button>`;
+    h += `<button class="scan-btn" id="resume-btn">Reanudar</button>`;
   } else {
-    html += `<button class="scan-btn" id="pause-btn" style="border-color:rgba(247,118,142,.2);color:var(--red);">Pausar</button>`;
+    h += `<button class="scan-btn" id="pause-btn" style="border-color:rgba(247,118,142,.2);color:var(--red);">Pausar</button>`;
   }
-  html += `<button class="scan-btn" id="add-task-btn">+ Tarea</button>`;
-  html += `</div></div>`;
+  h += `<button class="scan-btn" id="add-task-btn">+ Tarea</button>`;
+  h += `</div></div>`;
+  return h;
+}
 
-  // Collapsible config section
+function buildConfigSectionHtml(status, config) {
   const bl = (config.blacklist || []).join(', ');
   const idleChecked = status.idleEnabled ? 'checked' : '';
   const capChecked = status.capacityEnabled ? 'checked' : '';
+  const p = status.pacingDecision;
   const pacingStr = p && p.cycle ? `${p.action} · ${p.cycle.remainingMin}m · target ${p.targetUsage}%` : '';
-  html += `<div class="config-section">`;
-  html += `<div class="config-toggle" id="config-toggle">`;
-  html += `<span class="config-toggle-label">Configuracion</span>`;
-  html += `<span style="font-size:10px;color:var(--text-dim);">${status.workHours.start}:00–${status.workHours.end}:00${pacingStr ? ' · ' + pacingStr : ''}</span>`;
-  html += `<span class="config-toggle-arrow" id="config-arrow">&#9660;</span>`;
-  html += `</div>`;
-  html += `<div class="config-body" id="config-body">`;
-  html += `<div class="config-row"><span class="config-label">Horario</span>`;
-  html += `<input type="number" class="config-input" id="wh-start" value="${status.workHours.start}" min="0" max="23">`;
-  html += `<span style="font-size:10px;color:var(--text-dim);">a</span>`;
-  html += `<input type="number" class="config-input" id="wh-end" value="${status.workHours.end}" min="0" max="23">`;
-  html += `<span class="config-label" style="margin-left:12px;">Budget $</span>`;
-  html += `<input type="number" class="config-input" id="budget-input" value="${status.dailyBudget}" min="0" step="0.5" style="width:50px;">`;
-  html += `</div>`;
-  html += `<div class="config-row"><span class="config-label">Blacklist</span>`;
-  html += `<input type="text" class="config-input" id="blacklist-input" value="${esc(bl)}" placeholder="proyecto1, proyecto2">`;
-  html += `</div>`;
-  html += `<div class="config-row"><span class="config-label">Idle</span>`;
-  html += `<input type="checkbox" id="idle-enabled" ${idleChecked} style="-webkit-app-region:no-drag;">`;
-  html += `<span style="font-size:10px;color:var(--text-dim);">tras</span>`;
-  html += `<input type="number" class="config-input" id="idle-minutes" value="${status.idleMinutes}" min="5" max="120">`;
-  html += `<span style="font-size:10px;color:var(--text-dim);">min</span>`;
-  html += `<span class="config-value" style="color:var(--purple);">Actual: ${status.userIdleFor}m</span>`;
-  html += `</div>`;
-  html += `<div class="config-row"><span class="config-label">Pacing</span>`;
-  html += `<input type="checkbox" id="capacity-enabled" ${capChecked} style="-webkit-app-region:no-drag;">`;
-  html += `<span style="font-size:10px;color:var(--text-dim);">Tick:</span>`;
-  html += `<span style="font-size:10px;color:var(--yellow);">${Math.round((status.tickInterval || 60000) / 1000)}s</span>`;
-  html += `<input type="number" class="config-input" id="capacity-threshold" value="${status.capacityThreshold}" min="10" max="90" style="display:none;">`;
-  html += `</div>`;
-  html += `<div style="padding-top:6px;"><button class="scan-btn" id="save-config-btn" style="font-size:10px;padding:3px 12px;">Guardar</button></div>`;
-  html += `</div></div>`;
+  let h = `<div class="config-section">`;
+  h += `<div class="config-toggle" id="config-toggle">`;
+  h += `<span class="config-toggle-label">Configuracion</span>`;
+  h += `<span style="font-size:10px;color:var(--text-dim);">${status.workHours.start}:00–${status.workHours.end}:00${pacingStr ? ' · ' + pacingStr : ''}</span>`;
+  h += `<span class="config-toggle-arrow" id="config-arrow">&#9660;</span>`;
+  h += `</div>`;
+  h += `<div class="config-body" id="config-body">`;
+  h += `<div class="config-row"><span class="config-label">Horario</span>`;
+  h += `<input type="number" class="config-input" id="wh-start" value="${status.workHours.start}" min="0" max="23">`;
+  h += `<span style="font-size:10px;color:var(--text-dim);">a</span>`;
+  h += `<input type="number" class="config-input" id="wh-end" value="${status.workHours.end}" min="0" max="23">`;
+  h += `<span class="config-label" style="margin-left:12px;">Budget $</span>`;
+  h += `<input type="number" class="config-input" id="budget-input" value="${status.dailyBudget}" min="0" step="0.5" style="width:50px;">`;
+  h += `</div>`;
+  h += `<div class="config-row"><span class="config-label">Blacklist</span>`;
+  h += `<input type="text" class="config-input" id="blacklist-input" value="${esc(bl)}" placeholder="proyecto1, proyecto2">`;
+  h += `</div>`;
+  h += `<div class="config-row"><span class="config-label">Idle</span>`;
+  h += `<input type="checkbox" id="idle-enabled" ${idleChecked} style="-webkit-app-region:no-drag;">`;
+  h += `<span style="font-size:10px;color:var(--text-dim);">tras</span>`;
+  h += `<input type="number" class="config-input" id="idle-minutes" value="${status.idleMinutes}" min="5" max="120">`;
+  h += `<span style="font-size:10px;color:var(--text-dim);">min</span>`;
+  h += `<span class="config-value" style="color:var(--purple);">Actual: ${status.userIdleFor}m</span>`;
+  h += `</div>`;
+  h += `<div class="config-row"><span class="config-label">Pacing</span>`;
+  h += `<input type="checkbox" id="capacity-enabled" ${capChecked} style="-webkit-app-region:no-drag;">`;
+  h += `<span style="font-size:10px;color:var(--text-dim);">Tick:</span>`;
+  h += `<span style="font-size:10px;color:var(--yellow);">${Math.round((status.tickInterval || 60000) / 1000)}s</span>`;
+  h += `<input type="number" class="config-input" id="capacity-threshold" value="${status.capacityThreshold}" min="10" max="90" style="display:none;">`;
+  h += `</div>`;
+  h += `<div style="padding-top:6px;"><button class="scan-btn" id="save-config-btn" style="font-size:10px;padding:3px 12px;">Guardar</button></div>`;
+  h += `</div></div>`;
+  return h;
+}
+
+async function renderQueue() {
+  const queue = await ipcRenderer.invoke('get-queue');
+  const status = await ipcRenderer.invoke('get-scheduler-status');
+  const config = await ipcRenderer.invoke('get-orchestrator-config');
+
+  let html = buildSchedulerHeaderHtml(status);
+  html += buildConfigSectionHtml(status, config);
 
   if (!queue.length) {
     html += `<div class="empty-msg">No hay tareas en cola.<br><span style="font-size:11px;color:#565f89;">Se encolarán automáticamente fuera de horario según la salud de los proyectos.</span></div>`;
@@ -692,25 +707,16 @@ async function renderExecLog() {
   if (backBtn) backBtn.addEventListener('click', () => renderLog());
 }
 
-async function renderStats() {
-  let data, live;
-  try { data = await ipcRenderer.invoke('get-dashboard-stats'); } catch { data = null; }
-  try { live = await ipcRenderer.invoke('get-live-cycle'); } catch { live = null; }
-
-  let html = '';
-
-  // 1. Live cycle indicator
-  html += '<div class="stats-section">';
-  html += '<div class="stats-section-title">Ciclo 5h en vivo</div>';
+async function buildLiveCycleHtml(live) {
+  let h = '<div class="stats-section">';
+  h += '<div class="stats-section-title">Ciclo 5h en vivo</div>';
   if (live) {
-    const actionColors = { pace: '#9ece6a', accelerate: '#7aa2f7', burst: '#e0af68', coast: '#f7768e', wait: '#565f89' };
-    const fillColor = actionColors[live.action] || '#565f89';
-    html += `<div class="stats-cycle-track">`;
-    html += `<div class="stats-cycle-fill" style="width:${live.usedPercent}%;background:${fillColor};"></div>`;
-    html += `<div class="stats-cycle-target" style="left:${live.targetPercent}%;"></div>`;
-    html += `<div class="stats-cycle-label">${live.usedPercent}% usado · Objetivo: ${live.targetPercent}% · ${live.remainingMin}m restantes · 7d: ${live.sevenDayPercent}%</div>`;
-    html += `</div>`;
-    // Show scheduler debug info
+    const fillColor = COLORS.pacing[live.action] || COLORS.dim;
+    h += `<div class="stats-cycle-track">`;
+    h += `<div class="stats-cycle-fill" style="width:${live.usedPercent}%;background:${fillColor};"></div>`;
+    h += `<div class="stats-cycle-target" style="left:${live.targetPercent}%;"></div>`;
+    h += `<div class="stats-cycle-label">${live.usedPercent}% usado · Objetivo: ${live.targetPercent}% · ${live.remainingMin}m restantes · 7d: ${live.sevenDayPercent}%</div>`;
+    h += `</div>`;
     try {
       const sched = await ipcRenderer.invoke('get-scheduler-status');
       const d = sched.lastTickDebug;
@@ -720,43 +726,59 @@ async function renderStats() {
       let debugLine = `Modo: ${mode}${paused} · Tareas pendientes: ${pending}`;
       if (d) debugLine += ` · offHours: ${d.outsideHours} · idle: ${d.idle} · busy: ${d.busy} · pacing: ${d.pacingAction}`;
       if (d && d.reason) debugLine += ` · ${d.reason}`;
-      html += `<div style="font-size:10px;color:#565f89;margin-top:4px;">${debugLine}</div>`;
+      h += `<div style="font-size:10px;color:${COLORS.dim};margin-top:4px;">${debugLine}</div>`;
     } catch {}
   } else {
-    html += '<div style="font-size:11px;color:#565f89;">Sin datos de rate limit activos</div>';
+    h += `<div style="font-size:11px;color:${COLORS.dim};">Sin datos de rate limit activos</div>`;
   }
-  html += '</div>';
+  h += '</div>';
+  return h;
+}
 
-  // 2. Token usage bar chart (last 20 cycles)
-  html += '<div class="stats-section">';
-  html += '<div class="stats-section-title">Uso por ciclo (últimos 20)</div>';
+function buildCycleChartHtml(data) {
+  let h = '<div class="stats-section">';
+  h += '<div class="stats-section-title">Uso por ciclo (últimos 20)</div>';
   if (data && data.cycleChart.length > 0) {
     const cycles = data.cycleChart;
     const chartH = 100;
     const barW = Math.floor(340 / Math.max(cycles.length, 1));
     const gap = 2;
     const svgW = cycles.length * barW;
-    html += `<div class="stats-chart-wrap"><svg width="${svgW}" height="${chartH + 18}" viewBox="0 0 ${svgW} ${chartH + 18}">`;
-    // Target line at 95%
+    h += `<div class="stats-chart-wrap"><svg width="${svgW}" height="${chartH + 18}" viewBox="0 0 ${svgW} ${chartH + 18}">`;
     const targetY = chartH - (95 / 100 * chartH);
-    html += `<line x1="0" y1="${targetY}" x2="${svgW}" y2="${targetY}" stroke="#e0af68" stroke-width="1" stroke-dasharray="4,3" opacity=".5"/>`;
+    h += `<line x1="0" y1="${targetY}" x2="${svgW}" y2="${targetY}" stroke="${COLORS.yellow}" stroke-width="1" stroke-dasharray="4,3" opacity=".5"/>`;
     for (let i = 0; i < cycles.length; i++) {
       const pct = cycles[i].fiveHourPercent || 0;
-      const h = pct / 100 * chartH;
+      const bh = pct / 100 * chartH;
       const x = i * barW + gap / 2;
       const w = barW - gap;
-      const y = chartH - h;
+      const y = chartH - bh;
       const date = cycles[i].capturedAt ? new Date(cycles[i].capturedAt).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }) : '';
-      html += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="2" fill="#7aa2f7" opacity=".85"><title>${date}: ${pct}%</title></rect>`;
+      h += `<rect x="${x}" y="${y}" width="${w}" height="${bh}" rx="2" fill="${COLORS.blue}" opacity=".85"><title>${date}: ${pct}%</title></rect>`;
       if (cycles.length <= 20) {
-        html += `<text x="${x + w / 2}" y="${chartH + 12}" text-anchor="middle" font-size="8" fill="#565f89">${date}</text>`;
+        h += `<text x="${x + w / 2}" y="${chartH + 12}" text-anchor="middle" font-size="8" fill="${COLORS.dim}">${date}</text>`;
       }
     }
-    html += '</svg></div>';
+    h += '</svg></div>';
   } else {
-    html += '<div style="font-size:11px;color:#565f89;">Sin datos de ciclos aún</div>';
+    h += `<div style="font-size:11px;color:${COLORS.dim};">Sin datos de ciclos aún</div>`;
   }
-  html += '</div>';
+  h += '</div>';
+  return h;
+}
+
+async function renderStats() {
+  let data, live;
+  try { data = await ipcRenderer.invoke('get-dashboard-stats'); } catch { data = null; }
+  try { live = await ipcRenderer.invoke('get-live-cycle'); } catch { live = null; }
+
+  let html = '';
+
+  // 1. Live cycle indicator
+  html += await buildLiveCycleHtml(live);
+
+  // 2. Token usage bar chart (last 20 cycles)
+  html += buildCycleChartHtml(data);
 
   // 3. Cost summary cards
   if (data) {
@@ -777,8 +799,8 @@ async function renderStats() {
     html += '<table class="stats-table"><tr><th>Skill</th><th>Total</th><th>OK</th><th>Error</th><th>Éxito</th></tr>';
     for (const [skill, s] of Object.entries(data.activityBySkill)) {
       const rate = s.total > 0 ? Math.round(s.done / s.total * 100) : 0;
-      const rateColor = rate > 80 ? '#9ece6a' : rate > 50 ? '#e0af68' : '#f7768e';
-      html += `<tr><td>${esc(skill)}</td><td>${s.total}</td><td>${s.done}</td><td>${s.failed}</td><td style="color:${rateColor};font-weight:600;">${rate}%</td></tr>`;
+      const rc = rate > 80 ? COLORS.green : rate > 50 ? COLORS.yellow : COLORS.red;
+      html += `<tr><td>${esc(skill)}</td><td>${s.total}</td><td>${s.done}</td><td>${s.failed}</td><td style="color:${rc};font-weight:600;">${rate}%</td></tr>`;
     }
     html += '</table></div>';
   }
@@ -805,8 +827,6 @@ async function renderStats() {
 
   panelContent.innerHTML = html;
 }
-
-function esc(str) { return String(str || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
 
 // Live scheduler status updates
 ipcRenderer.on('scheduler-status', (ev, status) => {
