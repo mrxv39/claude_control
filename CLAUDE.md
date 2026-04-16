@@ -72,4 +72,4 @@ Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 - El toggle minimize usa `lastFocusedViaChip` (último HWND enfocado por click en chip), no `GetForegroundWindow` (que siempre devuelve la barra Electron por ser always-on-top).
 - CWD fallback a proceso hijo solo se activa si el CWD de la shell es exactamente `$USERPROFILE`.
 - State file lookup escanea subdirectorios del cwd, lo que añade I/O. Con muchos state files (50+) podría ralentizar el refresh.
-- El chime se reproduce con `powershell.exe` síncrono — bloquea el main process ~0.5s. Si molesta, considerar reproducción asíncrona.
+- La barra se registra como AppBar (SHAppBarMessage) — apps maximizadas no la tapan. Se desregistra al ocultar/abrir panel.
