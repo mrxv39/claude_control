@@ -13,7 +13,7 @@ const prevStatus = new Map(); // cwd -> status
 const waitingSince = new Map(); // cwd -> 'BUSY' if WAITING streak started from BUSY
 const waitingCount = new Map(); // cwd -> consecutive WAITING polls (debounce)
 
-function showToast(message) {
+function showToast(message, onClick) {
   const { screen } = require('electron');
   const wa = screen.getPrimaryDisplay().workArea;
   const W = 320, H = 60;
@@ -26,21 +26,29 @@ function showToast(message) {
     hasShadow: false,
     webPreferences: { nodeIntegration: false, contextIsolation: true }
   });
-  toast.setIgnoreMouseEvents(true);
   const safe = String(message).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  const clickJs = onClick ? "onclick=\"document.title='clicked'\"" : '';
+  const cursor = onClick ? 'cursor:pointer;' : '';
   toast.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`
-<!DOCTYPE html><html><body style="margin:0;font-family:'Segoe UI',sans-serif;">
+<!DOCTYPE html><html><body style="margin:0;font-family:'Segoe UI',sans-serif;${cursor}" ${clickJs}>
 <div style="background:#1a1b26;border:1px solid #7aa2f7;border-radius:10px;padding:12px 18px;color:#c0caf5;font-size:13px;display:flex;align-items:center;gap:10px;height:100%;box-sizing:border-box;">
 <span style="font-size:20px;">&#9989;</span>
 <span>${safe}</span>
 </div></body></html>`));
   toast.setAlwaysOnTop(true, 'screen-saver');
   toast.showInactive();
+  if (onClick) {
+    toast.webContents.on('page-title-updated', () => {
+      onClick();
+      try { toast.destroy(); } catch {}
+    });
+  }
   playChime();
-  setTimeout(() => { try { toast.destroy(); } catch {} }, 5000);
+  const autoClose = setTimeout(() => { try { toast.destroy(); } catch {} }, 5000);
+  toast.on('closed', () => clearTimeout(autoClose));
 }
 
-function checkStatusChanges(sessions) {
+function checkStatusChanges(sessions, onFocus) {
   for (const s of sessions) {
     if (!s.isClaude || !s.cwd) continue;
     const prev = prevStatus.get(s.cwd);
@@ -50,7 +58,11 @@ function checkStatusChanges(sessions) {
       waitingCount.set(s.cwd, count);
       if (count === 1) waitingSince.set(s.cwd, prev);
       if (waitingSince.get(s.cwd) === 'BUSY' && count === 3) {
-        showToast(`${s.project} termino — esperando tu input`);
+        const hwnd = s.hwnd;
+        const tabIndex = s.tabIndex;
+        showToast(`${s.project} terminó — click para enfocar`, () => {
+          if (onFocus) onFocus({ hwnd, tabIndex });
+        });
       }
     } else {
       waitingCount.set(s.cwd, 0);
@@ -114,9 +126,9 @@ function playChime() {
         fs.writeFileSync(chimePath, generateChimeWav());
       }
     }
-    require('child_process').execFileSync('powershell.exe',
+    require('child_process').execFile('powershell.exe',
       ['-NoProfile', '-Command', `(New-Object Media.SoundPlayer '${chimePath.replace(/'/g, "''")}').PlaySync()`],
-      { timeout: 5000 });
+      { timeout: 5000 }, () => {});
   } catch {}
 }
 

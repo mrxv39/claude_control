@@ -8,6 +8,7 @@
 const koffi = require('koffi');
 
 const user32 = koffi.load('user32.dll');
+const shell32 = koffi.load('shell32.dll');
 
 // Window functions
 const FindWindowA = user32.func('intptr __stdcall FindWindowA(str cls, str title)');
@@ -28,6 +29,49 @@ const FindWindowExA = user32.func('intptr __stdcall FindWindowExA(intptr parent,
 const GetWindowThreadProcessId = user32.func('uint __stdcall GetWindowThreadProcessId(intptr h, _Out_ uint32 *pid)');
 const GetWindowTextW = user32.func('int __stdcall GetWindowTextW(intptr h, uint16 *buf, int max)');
 const GetClassNameA = user32.func('int __stdcall GetClassNameA(intptr h, uint8 *buf, int max)');
+
+// ---- AppBar (shell32) ----
+const APPBARDATA = koffi.struct('APPBARDATA', {
+  cbSize: 'uint32',
+  hWnd: 'intptr',
+  uCallbackMessage: 'uint32',
+  uEdge: 'uint32',
+  rc: RECT,
+  lParam: 'intptr'
+});
+const SHAppBarMessage = shell32.func('uint __stdcall SHAppBarMessage(uint dwMessage, APPBARDATA *pData)');
+
+const ABM_NEW = 0;
+const ABM_REMOVE = 1;
+const ABM_QUERYPOS = 2;
+const ABM_SETPOS = 3;
+const ABE_TOP = 1;
+
+/**
+ * Register a window as a top-edge AppBar so Windows reserves screen space.
+ * @param {number} hwnd - native window handle
+ * @param {number} barHeight - height in pixels to reserve
+ */
+function registerAppBar(hwnd, barHeight) {
+  const { screen } = require('electron');
+  const wa = screen.getPrimaryDisplay().bounds;
+  const abd = { cbSize: koffi.sizeof(APPBARDATA), hWnd: hwnd, uCallbackMessage: 0, uEdge: ABE_TOP,
+    rc: { left: wa.x, top: wa.y, right: wa.x + wa.width, bottom: wa.y + barHeight }, lParam: 0 };
+  SHAppBarMessage(ABM_NEW, abd);
+  SHAppBarMessage(ABM_QUERYPOS, abd);
+  abd.rc.bottom = abd.rc.top + barHeight;
+  SHAppBarMessage(ABM_SETPOS, abd);
+}
+
+/**
+ * Unregister an AppBar, restoring the original work area.
+ * @param {number} hwnd - native window handle
+ */
+function unregisterAppBar(hwnd) {
+  const abd = { cbSize: koffi.sizeof(APPBARDATA), hWnd: hwnd, uCallbackMessage: 0, uEdge: 0,
+    rc: { left: 0, top: 0, right: 0, bottom: 0 }, lParam: 0 };
+  SHAppBarMessage(ABM_REMOVE, abd);
+}
 
 /**
  * Enumerate all Windows Terminal windows.
@@ -68,5 +112,5 @@ module.exports = {
   SetForegroundWindow, MoveWindow, GetWindowRect, IsWindowVisible,
   WindowFromPoint, GetAncestor, keybd_event, FindWindowExA,
   GetWindowThreadProcessId, GetWindowTextW, GetClassNameA,
-  enumWtWindows, focusWindow
+  enumWtWindows, focusWindow, registerAppBar, unregisterAppBar
 };

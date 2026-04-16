@@ -18,7 +18,8 @@ const notifications = require('./lib/notifications');
 // Destructure win32 for direct use
 const {
   FindWindowA, ShowWindow, IsIconic, IsWindow, MoveWindow,
-  GetWindowRect, IsWindowVisible, keybd_event, enumWtWindows, focusWindow
+  GetWindowRect, IsWindowVisible, keybd_event, enumWtWindows, focusWindow,
+  registerAppBar, unregisterAppBar
 } = win32;
 
 let mainWindow;
@@ -29,12 +30,12 @@ let isQuitting = false;
 
 function createWindow() {
   const { screen } = require('electron');
-  const wa = screen.getPrimaryDisplay().workArea;
+  const bounds = screen.getPrimaryDisplay().bounds;
   const initW = 300;
-  const initX = Math.round((wa.width - initW) / 2) + wa.x;
+  const initX = Math.round((bounds.width - initW) / 2) + bounds.x;
 
   mainWindow = new BrowserWindow({
-    width: initW, height: 48, x: initX, y: wa.y,
+    width: initW, height: 48, x: initX, y: bounds.y,
     frame: false, transparent: false,
     alwaysOnTop: true, skipTaskbar: false, resizable: false,
     backgroundColor: '#181825',
@@ -49,10 +50,13 @@ function createWindow() {
     if (!isQuitting) { e.preventDefault(); mainWindow.hide(); }
   });
 
+  // Only save user position on real drag (not programmatic moves at startup)
+  let moveReady = false;
+  setTimeout(() => { moveReady = true; }, 3000);
   mainWindow.on('move', () => {
-    if (isSettingBounds) return;
-    const [x, y] = mainWindow.getPosition();
-    userPosition = { x, y };
+    if (isSettingBounds || !moveReady) return;
+    const [x] = mainWindow.getPosition();
+    userPosition = { x };
   });
 }
 
@@ -79,7 +83,12 @@ function createTray() {
   tray = new Tray(icon);
   tray.setToolTip('Claudio Control');
   const menu = Menu.buildFromTemplate([
-    { label: 'Mostrar', click: () => { mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver'); } },
+    { label: 'Mostrar', click: () => {
+      mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      if (!panelOpen) {
+        try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch {}
+      }
+    } },
     { type: 'separator' },
     { label: 'Salir', click: () => { isQuitting = true; app.quit(); } }
   ]);
@@ -87,26 +96,46 @@ function createTray() {
 }
 
 // ---- IPC: bar management ----
-ipcMain.handle('hide-bar', () => { if (mainWindow) mainWindow.hide(); });
+ipcMain.handle('hide-bar', () => {
+  if (!mainWindow) return;
+  try { unregisterAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0)); } catch {}
+  mainWindow.hide();
+});
+
+ipcMain.handle('minimize-all-wt', () => {
+  const minimized = [];
+  const wtWindows = enumWtWindows();
+  for (const [, wins] of wtWindows) {
+    for (const w of wins) {
+      if (w.hwnd && IsWindow(w.hwnd) && IsWindowVisible(w.hwnd) && !IsIconic(w.hwnd)) {
+        ShowWindow(w.hwnd, 6); // SW_MINIMIZE
+        minimized.push(w.hwnd);
+      }
+    }
+  }
+  return minimized;
+});
+
+ipcMain.handle('restore-wt', (ev, hwnds) => {
+  for (const hwnd of hwnds) {
+    if (IsWindow(hwnd)) ShowWindow(hwnd, 9); // SW_RESTORE
+  }
+});
 
 ipcMain.handle('resize-bar', (event, w) => {
   if (!mainWindow) return;
   const { screen } = require('electron');
-  const wa = screen.getPrimaryDisplay().workArea;
-  const width = Math.max(180, Math.min(Math.ceil(w), wa.width));
+  const bounds = screen.getPrimaryDisplay().bounds;
+  const width = Math.max(180, Math.min(Math.ceil(w), bounds.width));
   const [, h] = mainWindow.getSize();
 
-  let x, y;
-  if (userPosition) {
-    x = Math.max(wa.x, Math.min(userPosition.x, wa.x + wa.width - width));
-    y = Math.max(wa.y, Math.min(userPosition.y, wa.y + wa.height - h));
-  } else {
-    x = Math.round((wa.width - width) / 2) + wa.x;
-    y = wa.y;
-  }
+  // Bar always stays at top of screen (y=0), only x changes
+  const x = userPosition
+    ? Math.max(bounds.x, Math.min(userPosition.x, bounds.x + bounds.width - width))
+    : Math.round((bounds.width - width) / 2) + bounds.x;
 
   isSettingBounds = true;
-  mainWindow.setBounds({ x, y, width, height: h });
+  mainWindow.setBounds({ x, y: bounds.y, width, height: h });
   isSettingBounds = false;
 });
 
@@ -302,7 +331,9 @@ ipcMain.handle('get-sessions', async () => {
 
     resolveHwnds(arr);
     overlayManager.syncOverlays(arr);
-    notifications.checkStatusChanges(arr);
+    notifications.checkStatusChanges(arr, ({ hwnd, tabIndex }) => {
+      if (hwnd) focusWindow(hwnd);
+    });
 
     // Auto-tile using all visible WT windows
     const wtWindows2 = enumWtWindows();
@@ -391,6 +422,9 @@ ipcMain.handle('toggle-panel', () => {
   const wa = screen.getPrimaryDisplay().workArea;
 
   if (panelOpen) {
+    // Unregister AppBar while panel is open (bar is no longer a thin top strip)
+    try { unregisterAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0)); } catch {}
+
     const [bx, by] = mainWindow.getPosition();
     const [bw] = mainWindow.getSize();
     barBoundsBeforePanel = { x: bx, y: by, width: bw };
@@ -405,12 +439,15 @@ ipcMain.handle('toggle-panel', () => {
     mainWindow.setResizable(false);
     mainWindow.focus();
   } else {
-    const b = barBoundsBeforePanel || { x: wa.x, y: wa.y, width: 600 };
+    const bounds = screen.getPrimaryDisplay().bounds;
+    const b = barBoundsBeforePanel || { x: bounds.x, y: bounds.y, width: 600 };
     mainWindow.setResizable(true);
     mainWindow.setBounds({ x: b.x, y: b.y, width: b.width, height: BAR_H });
     mainWindow.setResizable(false);
     mainWindow.setAlwaysOnTop(true, 'screen-saver');
     barBoundsBeforePanel = null;
+    // Re-register AppBar now that the bar is back to thin strip
+    try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch {}
   }
   return panelOpen;
 });
@@ -501,13 +538,23 @@ if (!gotLock) {
   process.exit(0);
 }
 app.on('second-instance', () => {
-  if (mainWindow) { mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver'); }
+  if (mainWindow) {
+    mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    if (!panelOpen) {
+      try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch {}
+    }
+  }
 });
 
 app.whenReady().then(() => {
   createWindow();
   createTray();
   overlayManager.startLoop();
+  // Register as AppBar so maximized apps don't go behind the bar
+  try {
+    const nativeHwnd = mainWindow.getNativeWindowHandle().readInt32LE(0);
+    registerAppBar(nativeHwnd, BAR_H);
+  } catch (e) { console.error('AppBar registration failed:', e.message); }
   mainWindow.webContents.on('did-finish-load', () => {
     checkHookSetup();
     setupStatusLine();
@@ -541,6 +588,11 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
 app.on('before-quit', () => {
   isQuitting = true;
+  // Unregister AppBar to restore work area
+  try {
+    const nativeHwnd = mainWindow.getNativeWindowHandle().readInt32LE(0);
+    unregisterAppBar(nativeHwnd);
+  } catch {}
   overlayManager.setQuitting(true);
   scheduler.stop();
   overlayManager.stopLoop();
