@@ -198,13 +198,13 @@ ipcMain.handle('tile-windows', async (event, hwnds) => {
     const valid = hwnds.map(Number).filter(h => h && IsWindow(h));
     if (valid.length === 0) return 'NO_HWNDS';
 
+    // workArea already excludes the AppBar-reserved space
     const { screen } = require('electron');
     const wa = screen.getPrimaryDisplay().workArea;
-    const BAR_H = 48;
     const x0 = wa.x;
-    const y0 = wa.y + BAR_H;
+    const y0 = wa.y;
     const w0 = wa.width;
-    const h0 = wa.height - BAR_H;
+    const h0 = wa.height;
 
     const n = valid.length;
     let cols, rows;
@@ -242,12 +242,12 @@ function autoTile(hwnds) {
   if (sorted.length === 0) return;
 
   const { screen } = require('electron');
+  // workArea already excludes the AppBar-reserved space, no extra offset needed
   const wa = screen.getPrimaryDisplay().workArea;
-  const BAR_H = 48;
   const x0 = wa.x;
-  const y0 = wa.y + BAR_H;
+  const y0 = wa.y;
   const w0 = wa.width;
-  const h0 = wa.height - BAR_H;
+  const h0 = wa.height;
 
   const n = sorted.length;
   let cols, rows;
