@@ -48,15 +48,35 @@ const ABM_SETPOS = 3;
 const ABE_TOP = 1;
 
 /**
+ * Build the AppBar rect from display bounds and bar height (pure logic).
+ * @param {{x: number, y: number, width: number}} displayBounds
+ * @param {number} barHeight
+ * @returns {{left: number, top: number, right: number, bottom: number}}
+ */
+function buildAppBarRect(displayBounds, barHeight) {
+  return {
+    left: displayBounds.x,
+    top: displayBounds.y,
+    right: displayBounds.x + displayBounds.width,
+    bottom: displayBounds.y + barHeight
+  };
+}
+
+/**
  * Register a window as a top-edge AppBar so Windows reserves screen space.
+ * Idempotent: calls ABM_REMOVE first to clean up any stale registration
+ * (e.g. from a previous process killed with taskkill /F).
  * @param {number} hwnd - native window handle
  * @param {number} barHeight - height in pixels to reserve
  */
 function registerAppBar(hwnd, barHeight) {
   const { screen } = require('electron');
   const wa = screen.getPrimaryDisplay().bounds;
+  const rc = buildAppBarRect(wa, barHeight);
   const abd = { cbSize: koffi.sizeof(APPBARDATA), hWnd: hwnd, uCallbackMessage: 0, uEdge: ABE_TOP,
-    rc: { left: wa.x, top: wa.y, right: wa.x + wa.width, bottom: wa.y + barHeight }, lParam: 0 };
+    rc, lParam: 0 };
+  // Defensive: remove stale registration before re-registering
+  SHAppBarMessage(ABM_REMOVE, abd);
   SHAppBarMessage(ABM_NEW, abd);
   SHAppBarMessage(ABM_QUERYPOS, abd);
   abd.rc.bottom = abd.rc.top + barHeight;
@@ -112,5 +132,5 @@ module.exports = {
   SetForegroundWindow, MoveWindow, GetWindowRect, IsWindowVisible,
   WindowFromPoint, GetAncestor, keybd_event, FindWindowExA,
   GetWindowThreadProcessId, GetWindowTextW, GetClassNameA,
-  enumWtWindows, focusWindow, registerAppBar, unregisterAppBar
+  enumWtWindows, focusWindow, registerAppBar, unregisterAppBar, buildAppBarRect
 };

@@ -31,8 +31,8 @@ let userPosition = null;   // { x, y } — set when user drags the bar
 let isSettingBounds = false; // suppress 'move' during programmatic setBounds
 let isQuitting = false;
 
-function appBarRegister() { try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch {} }
-function appBarUnregister() { try { unregisterAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0)); } catch {} }
+function appBarRegister() { try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch (e) { console.error('appBarRegister failed:', e.message); } }
+function appBarUnregister() { try { unregisterAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0)); } catch (e) { console.error('appBarUnregister failed:', e.message); } }
 
 function createWindow() {
   const { screen } = require('electron');

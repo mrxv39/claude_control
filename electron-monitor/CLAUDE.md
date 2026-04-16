@@ -26,7 +26,7 @@
 ## Tests
 
 - Framework: **vitest** (`npm test` = `vitest run`)
-- 134 tests en 9 archivos: orchestrator-store (14), scheduler (22), skill-analyzer (16), token-monitor (17), utils (8), token-history (16), stats-aggregator (8), conversation-reader (22), project-analyzer (11)
+- 149 tests en 10 archivos: orchestrator-store (14), scheduler (22), skill-analyzer (16), token-monitor (17), utils (8), token-history (16), stats-aggregator (8), conversation-reader (22), project-analyzer (11), appbar (15)
 - Solo módulos de lógica pura (sin FFI/Electron)
 
 ## IPC Channels (main ↔ renderer)

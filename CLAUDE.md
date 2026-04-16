@@ -39,7 +39,7 @@ Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 
 ## Convenciones del proyecto
 
-- **Tests**: `npm test` (vitest) en `electron-monitor/` — 134 tests en 9 archivos (orchestrator-store, scheduler, token-monitor, skill-analyzer, utils, token-history, stats-aggregator, conversation-reader, project-analyzer). Módulos con FFI/Electron se verifican manualmente reiniciando la app.
+- **Tests**: `npm test` (vitest) en `electron-monitor/` — 149 tests en 10 archivos (orchestrator-store, scheduler, token-monitor, skill-analyzer, utils, token-history, stats-aggregator, conversation-reader, project-analyzer, appbar). Módulos con FFI/Electron se verifican manualmente reiniciando la app.
 - **Reiniciar la app**: `Get-Process electron | Stop-Process -Force` y luego lanzar `npx electron .` desde `electron-monitor/`. Cuidado: `cmd /c` como padre muere si la shell padre cierra → usar `run_in_background` o `Start-Process` desacoplado.
 - **state files**: `~/.claude/claudio-state/<sha1-16char>.json`. Se pueden borrar para forzar re-captura del HWND.
 - **chime.wav**: se genera automáticamente en `~/.claude/claudio-state/chime.wav`. Borrar para regenerar.
