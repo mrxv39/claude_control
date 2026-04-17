@@ -97,32 +97,15 @@ function render(sessions) {
     d.title = `${s.project}\n${s.cwd || ''}\nEstado: ${s.status}\nContexto: ${ctx}%\nPID: ${s.pid}`;
     const run = s.running !== '-' ? ` <span class="run">[${esc(s.running)}]</span>` : '';
 
-    // Build main row with cached git badge
+    // Build main row (branch + context % shown in WT overlay titles, not in chips)
     const mainDiv = document.createElement('div');
     mainDiv.className = 'chip-main';
-    const cached = s.cwd ? gitCache[s.cwd] : null;
-    let gitHtml = '';
-    if (cached && cached.branch) {
-      const shortBranch = cached.branch.length > 16 ? cached.branch.slice(0, 15) + '\u2026' : cached.branch;
-      const cls = cached.dirty > 0 ? 'git-badge git-dirty' : 'git-badge';
-      gitHtml = `<span class="${cls}" title="${esc(cached.branch)}">${esc(shortBranch)}${cached.dirty > 0 ? ' +' + cached.dirty : ''}</span>`;
-    }
-    let ctxHtml = '';
-    if (s.isClaude && ctx > 0) {
-      const ctxCls = ctx < 50 ? 'ctx-low' : ctx < 80 ? 'ctx-mid' : 'ctx-high';
-      ctxHtml = `<span class="ctx-badge ${ctxCls}">${ctx}%</span>`;
-    }
-    mainDiv.innerHTML = `<span class="dot"></span><span class="name">${esc(s.project)}</span>${run}${gitHtml}${ctxHtml}`;
+    // Note: innerHTML is safe — all dynamic values go through esc() (HTML entity escaping).
+    // This is a local Electron app with no remote content.
+    mainDiv.innerHTML = `<span class="dot"></span><span class="name">${esc(s.project)}</span>${run}`;
     d.appendChild(mainDiv);
 
-    // Context usage bar (only for Claude sessions)
-    if (s.isClaude && ctx > 0) {
-      const barColor = rateColor(ctx);
-      const bar = document.createElement('div');
-      bar.className = 'ctx-bar';
-      bar.innerHTML = `<div class="ctx-fill" style="width:${Math.min(ctx,100)}%;background:${barColor}"></div>`;
-      d.appendChild(bar);
-    }
+    // Context bar removed — context % now shown in WT overlay titles
 
     // Build service row with clickable badges
     if (s.services.length) {

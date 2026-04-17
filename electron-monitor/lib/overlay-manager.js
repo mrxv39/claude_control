@@ -11,6 +11,9 @@
  * @property {Electron.BrowserWindow} win
  * @property {string} label
  * @property {string} status - 'BUSY' | 'WAITING' | 'IDLE'
+ * @property {string|null} branch - Git branch
+ * @property {number} dirty - Git dirty count
+ * @property {number} contextPercent - Context window usage %
  * @property {boolean} offscreen - Currently hidden
  * @property {number} [lastX]
  * @property {number} [lastY]
@@ -55,15 +58,29 @@ const escapeHtml = require('./utils').escapeHtml;
 /**
  * @param {string} label
  * @param {string} status - 'BUSY' | 'WAITING' | 'IDLE'
+ * @param {string|null} [branch] - Git branch name
+ * @param {number} [dirty=0] - Dirty file count
+ * @param {number} [contextPercent=0] - Context window usage %
  * @returns {string} data: URL for overlay HTML
  */
-function overlayHtml(label, status) {
+function overlayHtml(label, status, branch, dirty, contextPercent) {
   const safe = escapeHtml(label);
   const bg = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
   const textColor = status === 'BUSY' ? '#1a2e0a' : '#3a0a12';
+  // Build metadata spans (branch + context %)
+  let meta = '';
+  if (branch) {
+    const shortBranch = branch.length > 20 ? branch.slice(0, 19) + '\u2026' : branch;
+    const dirtyStr = dirty > 0 ? ' +' + dirty : '';
+    meta += `<span style="font-size:14px;font-weight:600;opacity:.8;margin-left:10px;">${escapeHtml(shortBranch)}${dirtyStr}</span>`;
+  }
+  if (contextPercent > 0) {
+    const ctxColor = contextPercent < 50 ? 'inherit' : contextPercent < 80 ? '#8a6d20' : '#6a1520';
+    meta += `<span style="font-size:14px;font-weight:700;margin-left:8px;color:${ctxColor};">${contextPercent}%</span>`;
+  }
   return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
 <!DOCTYPE html><html><body style="margin:0;padding:0;font-family:'Segoe UI',sans-serif;">
-<div style="background:${bg};border:1px solid ${bg};border-top:none;color:${textColor};font-size:16px;font-weight:700;padding:5px 15px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe}</div>
+<div style="background:${bg};border:1px solid ${bg};border-top:none;color:${textColor};font-size:16px;font-weight:700;padding:5px 15px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe}${meta}</div>
 </body></html>`);
 }
 
@@ -93,11 +110,14 @@ function createBaseOverlay(width, clickable = false) {
  * @param {number} hwnd
  * @param {string} label
  * @param {string} status
+ * @param {string|null} [branch]
+ * @param {number} [dirty=0]
+ * @param {number} [contextPercent=0]
  * @returns {Electron.BrowserWindow}
  */
-function createOverlay(hwnd, label, status) {
+function createOverlay(hwnd, label, status, branch, dirty, contextPercent) {
   const win = createBaseOverlay(400);
-  win.loadURL(overlayHtml(label, status));
+  win.loadURL(overlayHtml(label, status, branch, dirty, contextPercent));
   return win;
 }
 
@@ -175,12 +195,16 @@ function syncSkillButtons(sessions, recommendations) {
 
 /**
  * Sync title overlays to match current session list.
- * @param {Array<{hwnd: number, project: string, status: string}>} sessions
+ * @param {Array<{hwnd: number, project: string, status: string, gitBranch?: string, gitDirty?: number, contextPercent?: number}>} sessions
  */
 function syncOverlays(sessions) {
   const live = new Map();
   for (const s of sessions) {
-    if (s.hwnd && IsWindow(s.hwnd)) live.set(Number(s.hwnd), { label: s.project || '?', status: s.status || 'IDLE' });
+    if (s.hwnd && IsWindow(s.hwnd)) live.set(Number(s.hwnd), {
+      label: s.project || '?', status: s.status || 'IDLE',
+      branch: s.gitBranch || null, dirty: s.gitDirty || 0,
+      contextPercent: s.contextPercent || 0
+    });
   }
   // Remove dead overlays
   for (const [h, info] of overlays) {
@@ -190,13 +214,16 @@ function syncOverlays(sessions) {
   for (const [h, data] of live) {
     let info = overlays.get(h);
     if (!info) {
-      const win = createOverlay(h, data.label, data.status);
-      info = { win, label: data.label, status: data.status, offscreen: true };
+      const win = createOverlay(h, data.label, data.status, data.branch, data.dirty, data.contextPercent);
+      info = { win, label: data.label, status: data.status, branch: data.branch, dirty: data.dirty, contextPercent: data.contextPercent, offscreen: true };
       overlays.set(h, info);
-    } else if (info.label !== data.label || info.status !== data.status) {
-      info.win.loadURL(overlayHtml(data.label, data.status));
+    } else if (info.label !== data.label || info.status !== data.status || info.branch !== data.branch || info.dirty !== data.dirty || info.contextPercent !== data.contextPercent) {
+      info.win.loadURL(overlayHtml(data.label, data.status, data.branch, data.dirty, data.contextPercent));
       info.label = data.label;
       info.status = data.status;
+      info.branch = data.branch;
+      info.dirty = data.dirty;
+      info.contextPercent = data.contextPercent;
     }
   }
 }

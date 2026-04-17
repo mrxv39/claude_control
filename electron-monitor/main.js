@@ -28,6 +28,11 @@ let mainWindow;
 let tray = null;
 let userPosition = null;   // { x, y } — set when user drags the bar
 let isSettingBounds = false; // suppress 'move' during programmatic setBounds
+
+// Git cache for overlay titles (branch + dirty per cwd, 30s TTL)
+const mainGitCache = {};     // cwd -> { branch, dirty }
+const mainGitCacheTime = {}; // cwd -> timestamp
+const MAIN_GIT_TTL = 30000;
 let isQuitting = false;
 
 function appBarRegister() { try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch (e) { console.error('appBarRegister failed:', e.message); } }
@@ -317,6 +322,23 @@ ipcMain.handle('get-sessions', async () => {
 
     const wtWindows = enumWtWindows();
     resolveHwnds(arr, wtWindows);
+
+    // Refresh git cache for overlay titles (non-blocking, 30s TTL)
+    const now = Date.now();
+    const cwds = new Set(arr.filter(s => s.cwd && s.cwd !== 'N/A').map(s => s.cwd));
+    for (const cwd of cwds) {
+      if (!mainGitCacheTime[cwd] || now - mainGitCacheTime[cwd] > MAIN_GIT_TTL) {
+        mainGitCacheTime[cwd] = now;
+        gitStatus.getStatus(cwd).then(g => { mainGitCache[cwd] = g; }).catch(() => {});
+      }
+    }
+    // Enrich sessions with git data for overlays
+    for (const s of arr) {
+      const g = s.cwd ? mainGitCache[s.cwd] : null;
+      s.gitBranch = g ? g.branch : null;
+      s.gitDirty = g ? g.dirty : 0;
+    }
+
     overlayManager.syncOverlays(arr);
 
     // Sync skill recommendation buttons on overlays
