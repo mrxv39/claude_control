@@ -240,7 +240,14 @@ ipcRenderer.on('update-available', (ev, version, url) => {
   upd = document.createElement('div');
   upd.id = 'update-chip';
   upd.className = 'chip update';
-  upd.innerHTML = `<div class="chip-main"><span class="name" style="color:#e0af68">Update ${version}</span></div>`;
+  const mainDiv = document.createElement('div');
+  mainDiv.className = 'chip-main';
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'name';
+  nameSpan.style.color = '#e0af68';
+  nameSpan.textContent = 'Update ' + version;
+  mainDiv.appendChild(nameSpan);
+  upd.appendChild(mainDiv);
   upd.title = 'Click para descargar la nueva version';
   upd.addEventListener('click', () => { if (url && url.startsWith('https://github.com/')) require('electron').shell.openExternal(url); });
   document.querySelector('.chips').prepend(upd);
@@ -609,31 +616,48 @@ async function showAddTaskDialog() {
   const skills = await ipcRenderer.invoke('get-skills');
   const entries = Object.entries(projects).sort((a, b) => a[0].localeCompare(b[0]));
 
-  let html = '<div style="background:#1e1e2e;border:1px solid #2a2b3d;border-radius:8px;padding:14px;margin-bottom:10px;">';
-  html += '<div style="font-size:12px;color:#c0caf5;font-weight:600;margin-bottom:8px;">Añadir tarea manual</div>';
-  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
-  html += '<select id="add-project" style="background:#181825;border:1px solid #2a2b3d;color:#c0caf5;border-radius:4px;padding:4px 8px;font-size:11px;">';
-  for (const [name] of entries) html += `<option value="${esc(name)}">${esc(name)}</option>`;
-  html += '</select>';
-  html += '<select id="add-skill" style="background:#181825;border:1px solid #2a2b3d;color:#c0caf5;border-radius:4px;padding:4px 8px;font-size:11px;">';
-  for (const s of skills) html += `<option value="${esc(s.name)}">${esc(s.name)} ($${s.budgetUsd})</option>`;
-  html += '</select>';
-  html += '<button class="scan-btn" id="confirm-add-btn">Encolar</button>';
-  html += '<button class="scan-btn" id="cancel-add-btn" style="color:#565f89;">Cancelar</button>';
-  html += '</div></div>';
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'background:#1e1e2e;border:1px solid #2a2b3d;border-radius:8px;padding:14px;margin-bottom:10px;';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:12px;color:#c0caf5;font-weight:600;margin-bottom:8px;';
+  title.textContent = 'Añadir tarea manual';
+  wrapper.appendChild(title);
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;';
+  const selStyle = 'background:#181825;border:1px solid #2a2b3d;color:#c0caf5;border-radius:4px;padding:4px 8px;font-size:11px;';
+  const projSel = document.createElement('select');
+  projSel.id = 'add-project';
+  projSel.style.cssText = selStyle;
+  for (const [name] of entries) { const o = document.createElement('option'); o.value = name; o.textContent = name; projSel.appendChild(o); }
+  row.appendChild(projSel);
+  const skillSel = document.createElement('select');
+  skillSel.id = 'add-skill';
+  skillSel.style.cssText = selStyle;
+  for (const s of skills) { const o = document.createElement('option'); o.value = s.name; o.textContent = s.name + ' ($' + s.budgetUsd + ')'; skillSel.appendChild(o); }
+  row.appendChild(skillSel);
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'scan-btn';
+  confirmBtn.textContent = 'Encolar';
+  row.appendChild(confirmBtn);
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'scan-btn';
+  cancelBtn.style.color = '#565f89';
+  cancelBtn.textContent = 'Cancelar';
+  row.appendChild(cancelBtn);
+  wrapper.appendChild(row);
 
-  panelContent.insertAdjacentHTML('afterbegin', html);
+  panelContent.insertBefore(wrapper, panelContent.firstChild);
 
-  document.getElementById('confirm-add-btn').addEventListener('click', async () => {
-    const projName = document.getElementById('add-project').value;
-    const skill = document.getElementById('add-skill').value;
+  confirmBtn.addEventListener('click', async () => {
+    const projName = projSel.value;
+    const skill = skillSel.value;
     const proj = projects[projName];
     if (proj && skill) {
       await ipcRenderer.invoke('add-to-queue', { project: projName, skill, projectPath: proj.path });
       renderQueue();
     }
   });
-  document.getElementById('cancel-add-btn').addEventListener('click', () => renderQueue());
+  cancelBtn.addEventListener('click', () => renderQueue());
 }
 
 let selectedSessionCwd = null;
@@ -859,13 +883,19 @@ ipcRenderer.on('hook-missing', () => {
   sc = document.createElement('div');
   sc.id = 'setup-chip';
   sc.className = 'chip setup';
-  sc.innerHTML = `<div class="chip-main"><span class="name" style="color:#e0af68">Configurar hook</span></div>`;
+  function setChipText(text, color) {
+    while (sc.firstChild) sc.removeChild(sc.firstChild);
+    const m = document.createElement('div'); m.className = 'chip-main';
+    const n = document.createElement('span'); n.className = 'name'; n.style.color = color; n.textContent = text;
+    m.appendChild(n); sc.appendChild(m);
+  }
+  setChipText('Configurar hook', '#e0af68');
   sc.title = 'Click para configurar el hook de Claude Code (necesario para detectar estados)';
   sc.addEventListener('click', async () => {
-    sc.innerHTML = `<div class="chip-main"><span class="name" style="color:#e0af68">Configurando...</span></div>`;
+    setChipText('Configurando...', '#e0af68');
     const ok = await ipcRenderer.invoke('run-setup-hook');
     if (ok) { sc.remove(); refresh(); }
-    else { sc.innerHTML = `<div class="chip-main"><span class="name" style="color:#f7768e">Error al configurar</span></div>`; }
+    else { setChipText('Error al configurar', '#f7768e'); }
   });
   document.querySelector('.chips').prepend(sc);
 });
