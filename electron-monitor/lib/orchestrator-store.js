@@ -81,7 +81,7 @@ const DEFAULTS = {
   lastFullScan: null,
   blacklist: ['substract'],
   priorityRules: { high: 7, medium: 30, low: 90 },
-  priorityOverrides: {},  // { projectName: 'high'|'medium'|'low'|'ignored' }
+  priorityOverrides: {},
   idleEnabled: true,
   idleMinutes: 15,
   capacityEnabled: true,
@@ -96,8 +96,11 @@ const DEFAULTS = {
   queue: []
 };
 
+let _dirEnsured = false;
 function ensureDir() {
-  if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
+  if (_dirEnsured) return;
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  _dirEnsured = true;
 }
 
 /** @returns {OrchestratorConfig} Config merged with defaults, daily spend reset if date changed. */

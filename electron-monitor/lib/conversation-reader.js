@@ -169,20 +169,13 @@ function extractToolCalls(message) {
       const name = c.name || 'unknown';
       let summary = name;
 
-      // Add useful context based on tool type
       if (c.input) {
-        if (name === 'Edit' && c.input.file_path) {
-          summary = `Edit ${path.basename(c.input.file_path)}`;
-        } else if (name === 'Write' && c.input.file_path) {
-          summary = `Write ${path.basename(c.input.file_path)}`;
-        } else if (name === 'Read' && c.input.file_path) {
-          summary = `Read ${path.basename(c.input.file_path)}`;
+        if (['Edit', 'Write', 'Read'].includes(name) && c.input.file_path) {
+          summary = `${name} ${path.basename(c.input.file_path)}`;
         } else if (name === 'Bash' && c.input.command) {
           summary = `Bash: ${c.input.command.slice(0, 60)}`;
-        } else if (name === 'Grep' && c.input.pattern) {
-          summary = `Grep: ${c.input.pattern}`;
-        } else if (name === 'Glob' && c.input.pattern) {
-          summary = `Glob: ${c.input.pattern}`;
+        } else if ((name === 'Grep' || name === 'Glob') && c.input.pattern) {
+          summary = `${name}: ${c.input.pattern}`;
         }
       }
 

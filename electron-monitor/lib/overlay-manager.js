@@ -68,25 +68,36 @@ function overlayHtml(label, status) {
 }
 
 /**
- * @param {number} hwnd
- * @param {string} label
- * @param {string} status
+ * Create a frameless overlay BrowserWindow with shared defaults.
+ * @param {number} width
+ * @param {boolean} [clickable=false] - If false, ignores mouse events
  * @returns {Electron.BrowserWindow}
  */
-function createOverlay(hwnd, label, status) {
+function createBaseOverlay(width, clickable = false) {
   const win = new BrowserWindow({
-    width: 400, height: OVERLAY_H,
+    width, height: OVERLAY_H,
     x: -9999, y: -9999,
     frame: false, transparent: true, alwaysOnTop: true,
     skipTaskbar: true, focusable: false, resizable: false,
     hasShadow: false, show: false,
     webPreferences: { nodeIntegration: false, contextIsolation: true }
   });
-  win.setIgnoreMouseEvents(true);
-  win.loadURL(overlayHtml(label, status));
+  if (!clickable) win.setIgnoreMouseEvents(true);
   win.setAlwaysOnTop(true, 'screen-saver');
   win._ready = false;
   win.once('ready-to-show', () => { win._ready = true; win.showInactive(); });
+  return win;
+}
+
+/**
+ * @param {number} hwnd
+ * @param {string} label
+ * @param {string} status
+ * @returns {Electron.BrowserWindow}
+ */
+function createOverlay(hwnd, label, status) {
+  const win = createBaseOverlay(400);
+  win.loadURL(overlayHtml(label, status));
   return win;
 }
 
@@ -110,21 +121,9 @@ function skillButtonHtml(skill) {
  * @returns {Electron.BrowserWindow}
  */
 function createSkillOverlay(hwnd, skill, project, projectPath) {
-  const win = new BrowserWindow({
-    width: SKILL_BTN_W, height: OVERLAY_H,
-    x: -9999, y: -9999,
-    frame: false, transparent: true, alwaysOnTop: true,
-    skipTaskbar: true, focusable: false, resizable: false,
-    hasShadow: false, show: false,
-    webPreferences: { nodeIntegration: false, contextIsolation: true }
-  });
-  // Clickeable (no ignoreMouseEvents) but not focusable (won't steal focus from WT)
+  const win = createBaseOverlay(SKILL_BTN_W, true);
   win.loadURL(skillButtonHtml(skill));
-  win.setAlwaysOnTop(true, 'screen-saver');
-  win._ready = false;
-  win.once('ready-to-show', () => { win._ready = true; win.showInactive(); });
 
-  // Detect button click via title change (reliable from data: URLs)
   win.webContents.on('page-title-updated', (ev, title) => {
     ev.preventDefault();
     if (title === 'CLICK') {

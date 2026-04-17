@@ -35,9 +35,11 @@ const HISTORY_PATH = path.join(STATE_DIR, 'token-history.jsonl');
 /** @type {number|null} */
 let lastSavedResetAt = null;
 
-/** Ensure the state directory exists. */
+let _dirEnsured = false;
 function ensureDir() {
-  if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
+  if (_dirEnsured) return;
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  _dirEnsured = true;
 }
 
 /**

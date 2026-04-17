@@ -110,25 +110,24 @@ async function scan(projectDirs) {
 
       const fullPath = path.join(baseDir, entry.name);
 
-      // Must have .git
       if (!fs.existsSync(path.join(fullPath, '.git'))) continue;
 
-      // Must have at least one manifest or CLAUDE.md
       const hasManifest = STACK_MARKERS.some(m => fs.existsSync(path.join(fullPath, m.file)));
       const hasClaude = fs.existsSync(path.join(fullPath, 'CLAUDE.md'));
       if (!hasManifest && !hasClaude) continue;
 
-      const stack = detectStack(fullPath);
-      const lastModified = await lastCommitTime(fullPath);
-
       results.push({
         name: entry.name,
         path: fullPath,
-        stack,
-        lastModified
+        stack: detectStack(fullPath),
+        lastModified: null
       });
     }
   }
+
+  // Resolve lastCommitTime in parallel (N git calls at once instead of sequential)
+  const times = await Promise.all(results.map(p => lastCommitTime(p.path)));
+  results.forEach((p, i) => { p.lastModified = times[i]; });
 
   // Sort by last modified (most recent first), nulls at end
   results.sort((a, b) => {

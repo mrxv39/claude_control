@@ -81,7 +81,6 @@ function lastCommitDays(projectPath) {
  * @returns {boolean|null} true=up to date, false=stale, null=no manifest+lock pair
  */
 function depsUpToDate(projectPath) {
-  // Check if lock file is newer than manifest
   const pairs = [
     ['package.json', 'package-lock.json'],
     ['package.json', 'yarn.lock'],
@@ -154,28 +153,23 @@ async function analyze(project) {
  * @returns {Promise<Object<string, {path: string, stack: string, lastModified: string|null, lastAnalysis: string} & AnalysisResult>>}
  */
 async function analyzeAll(projects) {
-  const results = {};
-  for (const project of projects) {
+  const analyses = await Promise.all(projects.map(async (project) => {
     try {
-      const analysis = await analyze(project);
-      results[project.name] = {
-        path: project.path,
-        stack: project.stack,
-        lastModified: project.lastModified,
-        lastAnalysis: new Date().toISOString(),
-        ...analysis
-      };
+      return { project, analysis: await analyze(project) };
     } catch {
-      results[project.name] = {
-        path: project.path,
-        stack: project.stack,
-        lastModified: project.lastModified,
-        lastAnalysis: new Date().toISOString(),
-        checks: {},
-        score: 5,
-        suggestions: ['Error al analizar este proyecto']
-      };
+      return { project, analysis: { checks: {}, score: 5, suggestions: ['Error al analizar este proyecto'] } };
     }
+  }));
+
+  const results = {};
+  for (const { project, analysis } of analyses) {
+    results[project.name] = {
+      path: project.path,
+      stack: project.stack,
+      lastModified: project.lastModified,
+      lastAnalysis: new Date().toISOString(),
+      ...analysis
+    };
   }
   return results;
 }

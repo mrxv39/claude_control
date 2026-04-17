@@ -30,6 +30,8 @@ const ALL_SKILLS = [
 
 // --- Helpers ---
 
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build']);
+
 /**
  * @param {string} base
  * @param {...string} segments
@@ -40,67 +42,52 @@ function exists(base, ...segments) {
 }
 
 /**
- * Quick recursive search for file extensions (max 2 levels deep).
- * @param {string} base - Directory to search
- * @param {string[]} patterns - File extensions to match (e.g. ['.ts', '.tsx'])
+ * Walk directory tree (max depth 2), calling visitor on each file entry.
+ * Returns true immediately if visitor returns true (short-circuit).
+ * @param {string} base
+ * @param {(filePath: string, name: string) => boolean} visitor
  * @returns {boolean}
  */
-function globAny(base, patterns) {
-  // Quick recursive search for file extensions (max 2 levels deep for speed)
+function walkDir(base, visitor) {
   try {
-    const check = (dir, depth) => {
+    const walk = (dir, depth) => {
       if (depth > 2) return false;
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const e of entries) {
-        if (e.name === 'node_modules' || e.name === '.git' || e.name === 'dist' || e.name === 'build') continue;
+        if (SKIP_DIRS.has(e.name)) continue;
         const full = path.join(dir, e.name);
-        if (e.isFile() && patterns.some(p => e.name.endsWith(p))) return true;
-        if (e.isDirectory() && depth < 2 && check(full, depth + 1)) return true;
+        if (e.isFile() && visitor(full, e.name)) return true;
+        if (e.isDirectory() && depth < 2 && walk(full, depth + 1)) return true;
       }
       return false;
     };
-    return check(base, 0);
+    return walk(base, 0);
   } catch { return false; }
 }
 
 /**
- * @param {string} filePath
+ * Check if any file matching the given extensions exists (max 2 levels deep).
+ * @param {string} base
+ * @param {string[]} extensions - e.g. ['.ts', '.tsx']
+ * @returns {boolean}
+ */
+function globAny(base, extensions) {
+  return walkDir(base, (_, name) => extensions.some(ext => name.endsWith(ext)));
+}
+
+/**
+ * Search for a regex pattern in files with given extensions (max 2 levels deep).
+ * @param {string} base
+ * @param {string[]} extensions
  * @param {RegExp} pattern
  * @returns {boolean}
  */
-function grepFile(filePath, pattern) {
-  try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    return pattern.test(content);
-  } catch { return false; }
-}
-
-/**
- * Search for a regex pattern in files with given extensions.
- * @param {string} base - Directory to search
- * @param {string[]} extensions - File extensions to check
- * @param {RegExp} pattern - Pattern to search for
- * @param {number} [maxDepth=2] - Max directory depth
- * @returns {boolean}
- */
-function grepAny(base, extensions, pattern, maxDepth = 2) {
-  // Search for a regex pattern in files with given extensions
-  try {
-    const check = (dir, depth) => {
-      if (depth > maxDepth) return false;
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.name === 'node_modules' || e.name === '.git' || e.name === 'dist' || e.name === 'build') continue;
-        const full = path.join(dir, e.name);
-        if (e.isFile() && extensions.some(ext => e.name.endsWith(ext))) {
-          if (grepFile(full, pattern)) return true;
-        }
-        if (e.isDirectory() && depth < maxDepth && check(full, depth + 1)) return true;
-      }
-      return false;
-    };
-    return check(base, 0);
-  } catch { return false; }
+function grepAny(base, extensions, pattern) {
+  return walkDir(base, (filePath, name) => {
+    if (!extensions.some(ext => name.endsWith(ext))) return false;
+    try { return pattern.test(fs.readFileSync(filePath, 'utf8')); }
+    catch { return false; }
+  });
 }
 
 /**
@@ -139,10 +126,18 @@ function heuristicAnalyze(projectPath, stack) {
   const manifests = ['package.json', 'Cargo.toml', 'pyproject.toml', 'requirements.txt'];
   const hasManifest = manifests.some(m => exists(projectPath, m)) || !!pkg;
 
-  const hasTs = globAny(projectPath, ['.ts', '.tsx']);
-  const hasUi = globAny(projectPath, ['.jsx', '.tsx', '.vue', '.svelte']);
-  const hasHtml = globAny(projectPath, ['.html', '.css']);
-  const hasPy = globAny(projectPath, ['.py']);
+  // Single walk to detect all file extensions at once (instead of 4 separate walks)
+  const foundExts = new Set();
+  walkDir(projectPath, (_, name) => {
+    const dot = name.lastIndexOf('.');
+    if (dot > 0) foundExts.add(name.slice(dot));
+    return false; // continue walking
+  });
+
+  const hasTs = foundExts.has('.ts') || foundExts.has('.tsx');
+  const hasUi = foundExts.has('.jsx') || foundExts.has('.tsx') || foundExts.has('.vue') || foundExts.has('.svelte');
+  const hasHtml = foundExts.has('.html') || foundExts.has('.css');
+  const hasPy = foundExts.has('.py');
 
   const hasSupabase = exists(projectPath, 'supabase') ||
     (pkg && (allDeps['@supabase/supabase-js'] || allDeps['@supabase/ssr']));
