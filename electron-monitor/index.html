@@ -358,6 +358,27 @@ const AUTO_TEMPLATES = [
   { name: 'seguro-y-testeado', label: 'Seguro y testeado' },
 ];
 
+// Colores por stack (Tokyo Night palette coherente con el resto de la UI)
+const STACK_COLORS = {
+  'node': '#9ece6a',
+  'python': '#e0af68',
+  'tauri+rust': '#ff9e64',
+  'electron': '#7aa2f7',
+  'python+node': '#bb9af7',
+  'rust': '#ff9e64',
+  'unknown': '#565f89',
+};
+function stackColor(stack) { return STACK_COLORS[stack] || '#565f89'; }
+function scoreColor(score) {
+  const n = typeof score === 'number' ? score : 0;
+  if (n >= 7) return '#9ece6a';
+  if (n >= 4) return '#e0af68';
+  return '#f7768e';
+}
+
+// Filtro en memoria para la búsqueda
+let autoSearchQuery = '';
+
 function el(tag, attrs, ...children) {
   const node = document.createElement(tag);
   if (attrs) {
@@ -380,40 +401,80 @@ function el(tag, attrs, ...children) {
 
 function autoProjectRow(name, p, active) {
   const tpl = p.objective?.template || '';
-  const score = p.analysis?.score ?? p.score ?? '?';
-  const stack = p.stack || '';
+  const score = p.analysis?.score ?? p.score ?? null;
+  const stack = p.stack || 'unknown';
+  const sColor = stackColor(stack);
+  const scColor = score != null ? scoreColor(score) : '#565f89';
 
   const row = el('div', {
-    class: 'auto-row',
+    class: 'auto-row' + (active ? ' auto-row-active' : ''),
     dataset: { project: name },
-    style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderBottom: '1px solid rgba(255,255,255,.05)', fontSize: '12px' },
+    style: {
+      display: 'grid',
+      gridTemplateColumns: '28px 1fr auto auto',
+      alignItems: 'center',
+      gap: '10px',
+      padding: '8px 12px',
+      borderLeft: `3px solid ${active ? '#9ece6a' : 'transparent'}`,
+      background: active ? 'rgba(158,206,106,.06)' : 'transparent',
+      fontSize: '12px',
+      transition: 'background 120ms',
+    },
   });
 
-  const toggle = el('span', {
+  // Toggle pill-style (más visible que un punto)
+  const toggle = el('button', {
     class: 'auto-toggle',
-    style: { color: active ? '#9ece6a' : '#565f89', cursor: 'pointer' },
-    title: active ? 'Click para pausar' : 'Click para activar',
-    text: active ? '●' : '○',
-    onclick: async () => {
+    title: active ? 'Pausar este proyecto' : 'Activar este proyecto',
+    style: {
+      width: '24px', height: '16px', borderRadius: '8px', border: 'none', padding: '0',
+      background: active ? '#9ece6a' : 'rgba(255,255,255,.1)',
+      position: 'relative', cursor: 'pointer', transition: 'background 150ms',
+      flexShrink: '0',
+    },
+    onclick: async (ev) => {
+      ev.stopPropagation();
       await ipcRenderer.invoke('auto:toggle-active', name, !active);
       renderAuto();
     },
   });
+  toggle.appendChild(el('span', {
+    style: {
+      position: 'absolute', top: '2px', left: active ? '10px' : '2px',
+      width: '12px', height: '12px', borderRadius: '6px',
+      background: active ? '#1a1b26' : '#565f89',
+      transition: 'left 150ms',
+    },
+  }));
 
-  const label = el('span', {
-    style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  });
-  label.appendChild(document.createTextNode(name));
-  if (stack) {
-    label.appendChild(el('span', {
-      style: { color: '#565f89', fontSize: '10px', marginLeft: '6px' },
-      text: `[${stack}]`,
-    }));
-  }
+  // Nombre + stack badge
+  const labelCol = el('div', { style: { minWidth: '0', display: 'flex', alignItems: 'center', gap: '8px' } });
+  labelCol.appendChild(el('span', {
+    style: {
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      color: active ? '#c0caf5' : '#a9b1d6', fontWeight: active ? '500' : '400',
+    },
+    text: name,
+  }));
+  labelCol.appendChild(el('span', {
+    style: {
+      flexShrink: '0', color: sColor, background: sColor + '1a',
+      padding: '1px 6px', borderRadius: '3px', fontSize: '9px',
+      textTransform: 'uppercase', letterSpacing: '.3px',
+    },
+    text: stack,
+  }));
 
+  // Selector de objetivo
   const select = el('select', {
     class: 'auto-template',
-    style: { fontSize: '10px', padding: '1px 4px', background: 'rgba(255,255,255,.05)', color: '#c0caf5', border: '1px solid rgba(255,255,255,.1)', borderRadius: '3px' },
+    style: {
+      fontSize: '11px', padding: '2px 6px',
+      background: tpl ? '#7aa2f726' : 'rgba(255,255,255,.04)',
+      color: tpl ? '#7aa2f7' : '#a9b1d6',
+      border: `1px solid ${tpl ? '#7aa2f7' : 'rgba(255,255,255,.1)'}`,
+      borderRadius: '4px', cursor: 'pointer', minWidth: '140px',
+    },
     onchange: async () => {
       const val = select.value;
       await ipcRenderer.invoke('auto:set-objective', name, val ? { template: val } : null);
@@ -427,12 +488,17 @@ function autoProjectRow(name, p, active) {
     select.appendChild(opt);
   }
 
-  const scoreLabel = el('span', {
-    style: { color: '#565f89', fontSize: '10px', minWidth: '30px', textAlign: 'right' },
-    text: `${score}/10`,
+  // Score pill
+  const scorePill = el('span', {
+    style: {
+      color: scColor, background: scColor + '1a',
+      padding: '2px 6px', borderRadius: '4px', fontSize: '11px',
+      textAlign: 'center', minWidth: '40px', fontVariantNumeric: 'tabular-nums',
+    },
+    text: score != null ? `${score}/10` : '—',
   });
 
-  row.append(toggle, label, select, scoreLabel);
+  row.append(toggle, labelCol, select, scorePill);
   return row;
 }
 
@@ -453,33 +519,120 @@ function autoEventNode(e) {
   return el('div', { style: { color }, text: `${t} ${icon} ${e.type} ${detail}` });
 }
 
+function sectionHeader(title, count, color) {
+  return el('div', {
+    style: {
+      display: 'flex', alignItems: 'center', gap: '8px',
+      fontSize: '10px', color: color || '#7aa2f7', marginTop: '14px', marginBottom: '4px',
+      textTransform: 'uppercase', letterSpacing: '.5px', fontWeight: '600',
+      padding: '0 12px',
+    },
+  },
+  el('span', { text: title }),
+  el('span', {
+    style: { color: '#565f89', fontWeight: '400' },
+    text: `· ${count}`,
+  }));
+}
+
+function groupByStack(projects) {
+  const groups = {};
+  for (const [name, p] of projects) {
+    const s = p.stack || 'unknown';
+    if (!groups[s]) groups[s] = [];
+    groups[s].push([name, p]);
+  }
+  // Sort each group by name
+  for (const k of Object.keys(groups)) groups[k].sort((a, b) => a[0].localeCompare(b[0]));
+  // Return stacks in a sensible order
+  const order = ['node', 'tauri+rust', 'rust', 'python', 'python+node', 'electron', 'unknown'];
+  return order
+    .map(s => ({ stack: s, projects: groups[s] || [] }))
+    .filter(g => g.projects.length)
+    .concat(Object.keys(groups).filter(k => !order.includes(k)).map(s => ({ stack: s, projects: groups[s] })));
+}
+
+function matchesSearch(name, p, q) {
+  if (!q) return true;
+  const lower = q.toLowerCase();
+  if (name.toLowerCase().includes(lower)) return true;
+  if ((p.stack || '').toLowerCase().includes(lower)) return true;
+  return false;
+}
+
 async function renderAuto() {
   const cfg = await ipcRenderer.invoke('auto:get-config');
   const status = await ipcRenderer.invoke('auto:get-status');
   const events = await ipcRenderer.invoke('auto:get-events', 50);
   const projects = Object.entries(cfg.projects || {});
-  const active = projects.filter(([, p]) => p.active);
-  const paused = projects.filter(([, p]) => !p.active);
+  const filtered = projects.filter(([n, p]) => matchesSearch(n, p, autoSearchQuery));
+  const active = filtered.filter(([, p]) => p.active);
+  const paused = filtered.filter(([, p]) => !p.active);
 
   panelContent.replaceChildren();
 
-  // Header con dry-run badge + controls
-  const header = el('div', {
-    style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' },
+  // ---- Header card prominente ----
+  const headerCard = el('div', {
+    style: {
+      display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap',
+      padding: '14px 16px', marginBottom: '6px',
+      background: 'rgba(255,255,255,.02)',
+      borderBottom: '1px solid rgba(255,255,255,.06)',
+    },
   });
+
+  // Big status indicator
   const dryColor = status.dryRun ? '#e0af68' : '#9ece6a';
-  header.appendChild(el('span', {
-    style: { color: dryColor, background: dryColor + '26', padding: '2px 6px', borderRadius: '3px', fontSize: '10px' },
-    text: status.dryRun ? 'DRY-RUN' : 'LIVE',
+  const statusIcon = el('div', {
+    style: {
+      width: '8px', height: '8px', borderRadius: '50%',
+      background: dryColor, boxShadow: `0 0 8px ${dryColor}`,
+      flexShrink: '0',
+    },
+  });
+  const statusText = el('div', {}, el('div', {
+    style: { color: dryColor, fontSize: '13px', fontWeight: '600', letterSpacing: '.5px' },
+    text: status.dryRun ? 'DRY-RUN' : 'EJECUCIÓN REAL',
+  }), el('div', {
+    style: { color: '#565f89', fontSize: '10px' },
+    text: status.dryRun ? 'Decide pero no ejecuta' : 'Ejecuta skills reales',
   }));
-  header.appendChild(el('span', {
-    style: { color: '#7aa2f7', fontSize: '10px' },
-    text: `${active.length}/${projects.length} activos`,
-  }));
+  headerCard.append(statusIcon, statusText);
+
+  // Counter con más peso
+  const counter = el('div', { style: { marginLeft: '8px', paddingLeft: '14px', borderLeft: '1px solid rgba(255,255,255,.1)' } },
+    el('div', { style: { color: '#c0caf5', fontSize: '15px', fontWeight: '600', fontVariantNumeric: 'tabular-nums' }, text: `${projects.filter(p => p[1].active).length} / ${projects.length}` }),
+    el('div', { style: { color: '#565f89', fontSize: '10px' }, text: 'proyectos activos' }),
+  );
+  headerCard.appendChild(counter);
+
+  // Search
+  const search = el('input', {
+    type: 'text',
+    placeholder: 'Buscar por nombre o stack…',
+    value: autoSearchQuery,
+    style: {
+      marginLeft: 'auto', flex: '0 1 220px',
+      padding: '6px 10px', fontSize: '12px',
+      background: 'rgba(255,255,255,.04)',
+      border: '1px solid rgba(255,255,255,.1)',
+      borderRadius: '4px', color: '#c0caf5',
+      outline: 'none',
+    },
+    oninput: (ev) => { autoSearchQuery = ev.target.value; renderAuto(); },
+  });
+  headerCard.appendChild(search);
+
+  // Action buttons
   const dryBtn = el('button', {
     class: 'scan-btn',
-    style: { marginLeft: 'auto' },
-    text: status.dryRun ? 'Desactivar dry-run' : 'Activar dry-run',
+    style: {
+      fontSize: '11px', padding: '6px 10px',
+      background: status.dryRun ? 'rgba(158,206,106,.12)' : 'rgba(247,118,142,.12)',
+      borderColor: status.dryRun ? 'rgba(158,206,106,.3)' : 'rgba(247,118,142,.3)',
+      color: status.dryRun ? '#9ece6a' : '#f7768e',
+    },
+    text: status.dryRun ? '▶ Activar ejecución' : '◼ Volver a dry-run',
     onclick: async () => {
       await ipcRenderer.invoke('auto:set-dry-run', !status.dryRun);
       renderAuto();
@@ -487,7 +640,8 @@ async function renderAuto() {
   });
   const tickBtn = el('button', {
     class: 'scan-btn',
-    text: 'Tick ahora',
+    style: { fontSize: '11px', padding: '6px 10px' },
+    text: '⚡ Tick ahora',
     onclick: async () => {
       tickBtn.disabled = true;
       tickBtn.textContent = 'Ejecutando…';
@@ -495,51 +649,73 @@ async function renderAuto() {
       setTimeout(() => renderAuto(), 500);
     },
   });
-  header.append(dryBtn, tickBtn);
-  panelContent.appendChild(header);
+  headerCard.append(dryBtn, tickBtn);
+  panelContent.appendChild(headerCard);
 
-  // Sección activos
-  panelContent.appendChild(el('div', {
-    style: { fontSize: '11px', color: '#7aa2f7', marginBottom: '6px', textTransform: 'uppercase' },
-    text: `Activos (${active.length})`,
-  }));
+  // Auto-focus en search si había un query (para que sigas tecleando)
+  if (autoSearchQuery) setTimeout(() => { search.focus(); search.setSelectionRange(autoSearchQuery.length, autoSearchQuery.length); }, 0);
+
+  // ---- Sección ACTIVOS ----
+  panelContent.appendChild(sectionHeader('Activos', active.length, '#9ece6a'));
   if (!active.length) {
     panelContent.appendChild(el('div', {
-      class: 'empty-msg',
-      style: { padding: '12px', color: '#565f89' },
-      text: 'Ningún proyecto activo. Activa uno abajo para empezar.',
+      style: {
+        padding: '16px', margin: '4px 12px',
+        color: '#565f89', fontSize: '12px', fontStyle: 'italic',
+        textAlign: 'center',
+        background: 'rgba(255,255,255,.02)',
+        border: '1px dashed rgba(255,255,255,.08)',
+        borderRadius: '6px',
+      },
+      text: autoSearchQuery
+        ? 'Sin coincidencias activas. Limpia el buscador o activa alguno abajo.'
+        : 'Aún no has activado ningún proyecto. Activa uno abajo con el toggle para empezar.',
     }));
   } else {
     for (const [name, p] of active) panelContent.appendChild(autoProjectRow(name, p, true));
   }
 
-  // Sección pausados
-  panelContent.appendChild(el('div', {
-    style: { fontSize: '11px', color: '#565f89', marginTop: '16px', marginBottom: '6px', textTransform: 'uppercase' },
-    text: `Pausados (${paused.length})`,
-  }));
-  for (const [name, p] of paused.slice(0, 40)) panelContent.appendChild(autoProjectRow(name, p, false));
-  if (paused.length > 40) {
+  // ---- Sección PAUSADOS agrupados por stack ----
+  panelContent.appendChild(sectionHeader('Pausados', paused.length, '#565f89'));
+  if (!paused.length) {
     panelContent.appendChild(el('div', {
-      style: { padding: '6px', color: '#565f89', fontSize: '10px' },
-      text: `+${paused.length - 40} más…`,
+      style: { padding: '12px', margin: '4px 12px', color: '#565f89', fontSize: '11px', textAlign: 'center' },
+      text: autoSearchQuery ? 'Sin coincidencias pausadas.' : 'Todos los proyectos están activos.',
     }));
+  } else {
+    const groups = groupByStack(paused);
+    for (const g of groups) {
+      panelContent.appendChild(el('div', {
+        style: {
+          display: 'flex', alignItems: 'center', gap: '8px',
+          padding: '8px 12px 4px', fontSize: '10px',
+          color: stackColor(g.stack), textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: '600',
+        },
+      },
+      el('span', { text: g.stack }),
+      el('span', { style: { color: '#565f89', fontWeight: '400' }, text: `· ${g.projects.length}` })));
+      for (const [name, p] of g.projects) panelContent.appendChild(autoProjectRow(name, p, false));
+    }
   }
 
-  // Feed
-  panelContent.appendChild(el('div', {
-    style: { fontSize: '11px', color: '#7aa2f7', marginTop: '16px', marginBottom: '6px', textTransform: 'uppercase' },
-    text: `Feed (últimos ${events.length})`,
-  }));
+  // ---- Feed ----
+  panelContent.appendChild(sectionHeader('Feed', events.length, '#7aa2f7'));
   if (!events.length) {
     panelContent.appendChild(el('div', {
-      class: 'empty-msg',
-      style: { padding: '8px', color: '#565f89' },
+      style: { padding: '12px', margin: '4px 12px', color: '#565f89', fontSize: '11px', textAlign: 'center', fontStyle: 'italic' },
       text: 'Sin eventos aún. El orquestador emite en cada tick.',
     }));
   } else {
     const feedBox = el('div', {
-      style: { fontFamily: 'monospace', fontSize: '10px', lineHeight: '1.4' },
+      style: {
+        fontFamily: "'JetBrains Mono', Consolas, monospace", fontSize: '10px', lineHeight: '1.6',
+        padding: '8px 12px',
+        background: 'rgba(0,0,0,.15)',
+        margin: '4px 12px 12px',
+        borderRadius: '4px',
+        border: '1px solid rgba(255,255,255,.04)',
+        maxHeight: '260px', overflowY: 'auto',
+      },
     });
     for (const e of events.slice(-30).reverse()) feedBox.appendChild(autoEventNode(e));
     panelContent.appendChild(feedBox);
