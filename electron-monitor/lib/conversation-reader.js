@@ -13,18 +13,22 @@ const CLAUDE_DIR = path.join(process.env.USERPROFILE, '.claude', 'projects');
 /**
  * Convert a cwd to Claude's project directory name.
  * Same logic as get-sessions.ps1: `:\` → `--`, `\` and `/` → `-`, `_` → `-`
+ * @param {string} cwd - Absolute project path
+ * @returns {string} Dash-separated directory name
  */
 function cwdToProjectDir(cwd) {
   return cwd.replace(/:\\/g, '--').replace(/[\\/]/g, '-').replace(/_/g, '-');
 }
 
-// Cache for findSessionFile — avoids re-statting all JSONL files per cwd per call
-const _sessionFileCache = new Map(); // cwd -> { path, at }
+/** @type {Map<string, {path: string|null, at: number}>} cwd -> cached session file */
+const _sessionFileCache = new Map();
 const SESSION_FILE_CACHE_TTL = 10 * 1000; // 10s
 
 /**
  * Find the most recent JSONL session file for a cwd.
  * Cached for 10s per cwd to avoid repeated statSync on all JSONL files.
+ * @param {string} cwd - Project directory
+ * @returns {string|null} Absolute path to most recent JSONL file
  */
 function findSessionFile(cwd) {
   const now = Date.now();
@@ -60,7 +64,10 @@ function findSessionFile(cwd) {
 }
 
 /**
- * Read last N lines from a file (tail).
+ * Read the tail of a file (last maxBytes).
+ * @param {string} filePath - Absolute file path
+ * @param {number} [maxBytes=65536] - Maximum bytes to read from end
+ * @returns {string} UTF-8 text from the tail of the file
  */
 function tailFile(filePath, maxBytes = 64 * 1024) {
   try {
@@ -78,7 +85,18 @@ function tailFile(filePath, maxBytes = 64 * 1024) {
 }
 
 /**
+ * @typedef {Object} ConversationEntry
+ * @property {string} type - 'user' | 'assistant' | 'tool' | 'unknown'
+ * @property {string} [summary] - Human-readable summary of the entry
+ * @property {string} [timestamp] - ISO timestamp
+ * @property {Array<{name: string, summary: string}>} [tools] - Tool calls (assistant entries only)
+ */
+
+/**
  * Parse JSONL lines into structured entries.
+ * @param {string} text - Raw JSONL text
+ * @param {number} [maxEntries=50] - Max entries to parse from the tail
+ * @returns {ConversationEntry[]}
  */
 function parseEntries(text, maxEntries = 50) {
   const lines = text.split('\n').filter(Boolean);
@@ -120,6 +138,11 @@ function parseEntries(text, maxEntries = 50) {
   return entries;
 }
 
+/**
+ * Extract plain text from a Claude message object.
+ * @param {Object|string|null} message - Raw message (string, content array, or null)
+ * @returns {string}
+ */
 function extractText(message) {
   if (!message) return '';
   if (typeof message === 'string') return message;
@@ -133,6 +156,11 @@ function extractText(message) {
   return '';
 }
 
+/**
+ * Extract tool_use blocks from an assistant message.
+ * @param {Object|null} message - Raw assistant message
+ * @returns {Array<{name: string, summary: string}>}
+ */
 function extractToolCalls(message) {
   if (!message || !Array.isArray(message.content)) return [];
   return message.content

@@ -12,11 +12,19 @@
  * Returns: [{ name, path, stack, lastModified }]
  */
 
+/**
+ * @typedef {Object} ScannedProject
+ * @property {string} name - Directory name
+ * @property {string} path - Absolute path
+ * @property {string} stack - Detected stack (e.g. 'node', 'tauri+rust', 'python')
+ * @property {string|null} lastModified - ISO timestamp of last commit
+ */
+
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
-// Stack detection by manifest files
+/** @type {Array<{file: string, stack: string}>} */
 const STACK_MARKERS = [
   { file: 'Cargo.toml', stack: 'rust' },
   { file: 'pyproject.toml', stack: 'python' },
@@ -34,6 +42,11 @@ const SKIP = new Set([
   'viejos', 'Nueva carpeta', 'Nueva carpeta (2)',
 ]);
 
+/**
+ * Detect the tech stack of a project by checking manifest files.
+ * @param {string} projectPath - Absolute path to project root
+ * @returns {string} Stack identifier (e.g. 'node', 'tauri+rust', 'python', 'unknown')
+ */
 function detectStack(projectPath) {
   const stacks = [];
   for (const { file, stack } of STACK_MARKERS) {
@@ -59,6 +72,11 @@ function detectStack(projectPath) {
   return stacks.length ? stacks.join('+') : 'unknown';
 }
 
+/**
+ * Get the ISO timestamp of the most recent git commit.
+ * @param {string} projectPath
+ * @returns {Promise<string|null>} ISO date string or null
+ */
 function lastCommitTime(projectPath) {
   return new Promise(resolve => {
     execFile('git', ['log', '-1', '--format=%ct'], { cwd: projectPath, timeout: 5000 }, (err, stdout) => {
@@ -72,6 +90,8 @@ function lastCommitTime(projectPath) {
 /**
  * Scan configured directories for projects.
  * Only scans one level deep (direct children of each projectDir).
+ * @param {string[]} projectDirs - Base directories to scan
+ * @returns {Promise<ScannedProject[]>} Projects sorted by last commit (most recent first)
  */
 async function scan(projectDirs) {
   const results = [];

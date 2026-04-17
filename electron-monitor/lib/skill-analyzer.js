@@ -8,10 +8,20 @@
  * Results cached in orchestrator.json under project.applicableSkills.
  */
 
+/**
+ * @typedef {Object} SkillAnalysis
+ * @property {Object<string, boolean>} skills - Skill name -> applicable
+ * @property {string} analyzedAt - ISO timestamp
+ * @property {'heuristic'|'claude'} method
+ * @property {string} [topSkill] - Most impactful skill (claude method only)
+ * @property {string} [topSkillReason] - Why this skill matters most
+ */
+
 const fs = require('fs');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
 
+/** @type {string[]} */
 const ALL_SKILLS = [
   'audit-claude-md', 'security-review', 'dep-update', 'simplify', 'add-tests',
   'git-cleanup', 'supabase-audit', 'perf-audit', 'fix-types', 'ui-polish',
@@ -20,10 +30,21 @@ const ALL_SKILLS = [
 
 // --- Helpers ---
 
+/**
+ * @param {string} base
+ * @param {...string} segments
+ * @returns {boolean}
+ */
 function exists(base, ...segments) {
   return fs.existsSync(path.join(base, ...segments));
 }
 
+/**
+ * Quick recursive search for file extensions (max 2 levels deep).
+ * @param {string} base - Directory to search
+ * @param {string[]} patterns - File extensions to match (e.g. ['.ts', '.tsx'])
+ * @returns {boolean}
+ */
 function globAny(base, patterns) {
   // Quick recursive search for file extensions (max 2 levels deep for speed)
   try {
@@ -42,6 +63,11 @@ function globAny(base, patterns) {
   } catch { return false; }
 }
 
+/**
+ * @param {string} filePath
+ * @param {RegExp} pattern
+ * @returns {boolean}
+ */
 function grepFile(filePath, pattern) {
   try {
     const content = fs.readFileSync(filePath, 'utf8');
@@ -49,6 +75,14 @@ function grepFile(filePath, pattern) {
   } catch { return false; }
 }
 
+/**
+ * Search for a regex pattern in files with given extensions.
+ * @param {string} base - Directory to search
+ * @param {string[]} extensions - File extensions to check
+ * @param {RegExp} pattern - Pattern to search for
+ * @param {number} [maxDepth=2] - Max directory depth
+ * @returns {boolean}
+ */
 function grepAny(base, extensions, pattern, maxDepth = 2) {
   // Search for a regex pattern in files with given extensions
   try {
@@ -69,6 +103,10 @@ function grepAny(base, extensions, pattern, maxDepth = 2) {
   } catch { return false; }
 }
 
+/**
+ * @param {string} base
+ * @returns {Object|null} Parsed package.json or null
+ */
 function readPackageJson(base) {
   try {
     return JSON.parse(fs.readFileSync(path.join(base, 'package.json'), 'utf8'));
@@ -77,6 +115,12 @@ function readPackageJson(base) {
 
 // --- Heuristic Analysis ---
 
+/**
+ * Analyze skill applicability using file existence and dependency checks.
+ * @param {string} projectPath - Absolute path to project root
+ * @param {string} [stack] - Stack identifier (unused, kept for API compat)
+ * @returns {SkillAnalysis}
+ */
 function heuristicAnalyze(projectPath, stack) {
   // Try root package.json first, then one level deep (monorepos, subcarpetas)
   let pkg = readPackageJson(projectPath);
@@ -172,6 +216,11 @@ Also pick the ONE skill that would have the most impact right now for this proje
 
 Return: {"skills":{"audit-claude-md":true,"security-review":false,...},"topSkill":"skill-name","topSkillReason":"why this skill matters most"}`;
 
+/**
+ * Analyze skill applicability using Claude (sonnet) for richer results.
+ * @param {string} projectPath - Absolute path to project root
+ * @returns {Promise<SkillAnalysis|null>} null on timeout or parse failure
+ */
 function claudeAnalyze(projectPath) {
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
@@ -239,6 +288,9 @@ function claudeAnalyze(projectPath) {
 /**
  * Analyze which skills apply to a project.
  * Tries Claude first (if useClaude=true), falls back to heuristic.
+ * @param {{name: string, path: string, stack: string}} project
+ * @param {{useClaude?: boolean}} [options]
+ * @returns {Promise<SkillAnalysis>}
  */
 async function analyzeSkills(project, { useClaude = false } = {}) {
   if (useClaude) {

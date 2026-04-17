@@ -12,16 +12,43 @@
  * Returns a score 1-10 and check results per project.
  */
 
+/**
+ * @typedef {Object} HealthChecks
+ * @property {boolean} hasClaude - Has CLAUDE.md
+ * @property {boolean} hasGitignore - Has .gitignore
+ * @property {boolean} hasTests - Has a test directory
+ * @property {boolean|null} gitClean - Working tree clean (null = unknown)
+ * @property {boolean|null} depsOk - Lock file fresher than manifest (null = no pair found)
+ * @property {number|null} lastCommitDays - Days since last commit (null = unknown)
+ */
+
+/**
+ * @typedef {Object} AnalysisResult
+ * @property {HealthChecks} checks
+ * @property {number} score - 1-10 health score
+ * @property {string[]} suggestions - Human-readable improvement suggestions
+ */
+
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
 const TEST_DIRS = ['test', 'tests', '__tests__', 'spec', 'test-utils'];
 
+/**
+ * @param {string} base
+ * @param {...string} segments
+ * @returns {boolean}
+ */
 function fileExists(base, ...segments) {
   return fs.existsSync(path.join(base, ...segments));
 }
 
+/**
+ * Check if git working tree is clean.
+ * @param {string} projectPath
+ * @returns {Promise<boolean|null>} true=clean, false=dirty, null=error
+ */
 function gitClean(projectPath) {
   return new Promise(resolve => {
     execFile('git', ['status', '--porcelain'], { cwd: projectPath, timeout: 5000 }, (err, stdout) => {
@@ -31,6 +58,11 @@ function gitClean(projectPath) {
   });
 }
 
+/**
+ * Get days since the last git commit.
+ * @param {string} projectPath
+ * @returns {Promise<number|null>}
+ */
 function lastCommitDays(projectPath) {
   return new Promise(resolve => {
     execFile('git', ['log', '-1', '--format=%ct'], { cwd: projectPath, timeout: 5000 }, (err, stdout) => {
@@ -43,6 +75,11 @@ function lastCommitDays(projectPath) {
   });
 }
 
+/**
+ * Check if lock file is newer than manifest (deps up to date).
+ * @param {string} projectPath
+ * @returns {boolean|null} true=up to date, false=stale, null=no manifest+lock pair
+ */
 function depsUpToDate(projectPath) {
   // Check if lock file is newer than manifest
   const pairs = [
@@ -67,7 +104,9 @@ function depsUpToDate(projectPath) {
 }
 
 /**
- * Analyze a single project. Returns { checks, score, suggestions }.
+ * Analyze a single project's health.
+ * @param {{name: string, path: string}} project
+ * @returns {Promise<AnalysisResult>}
  */
 async function analyze(project) {
   const p = project.path;
@@ -110,7 +149,9 @@ async function analyze(project) {
 }
 
 /**
- * Analyze all projects. Returns Map<name, { ...project, checks, score, suggestions }>.
+ * Analyze all projects.
+ * @param {Array<{name: string, path: string, stack: string, lastModified: string|null}>} projects
+ * @returns {Promise<Object<string, {path: string, stack: string, lastModified: string|null, lastAnalysis: string} & AnalysisResult>>}
  */
 async function analyzeAll(projects) {
   const results = {};

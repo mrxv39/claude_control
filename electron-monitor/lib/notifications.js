@@ -5,15 +5,33 @@
  * and shows a custom toast + plays a two-tone chime.
  */
 
+/**
+ * @typedef {Object} Session
+ * @property {boolean} isClaude
+ * @property {string} [cwd]
+ * @property {string} [status] - 'BUSY' | 'WAITING' | 'IDLE'
+ * @property {string} [project]
+ * @property {number} [hwnd]
+ * @property {number} [tabIndex]
+ */
+
 const { BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { escapeHtml } = require('./utils');
 
-const prevStatus = new Map(); // cwd -> status
-const waitingSince = new Map(); // cwd -> 'BUSY' if WAITING streak started from BUSY
-const waitingCount = new Map(); // cwd -> consecutive WAITING polls (debounce)
+/** @type {Map<string, string>} cwd -> last known status */
+const prevStatus = new Map();
+/** @type {Map<string, string>} cwd -> status that started the WAITING streak */
+const waitingSince = new Map();
+/** @type {Map<string, number>} cwd -> consecutive WAITING polls (debounce) */
+const waitingCount = new Map();
 
+/**
+ * Show a toast notification in the bottom-right corner.
+ * @param {string} message - Text to display
+ * @param {() => void} [onClick] - Callback when toast is clicked
+ */
 function showToast(message, onClick) {
   const { screen } = require('electron');
   const wa = screen.getPrimaryDisplay().workArea;
@@ -49,6 +67,11 @@ function showToast(message, onClick) {
   toast.on('closed', () => clearTimeout(autoClose));
 }
 
+/**
+ * Track BUSY→WAITING transitions and notify with toast+chime after 3 consecutive polls.
+ * @param {Session[]} sessions - Current session list
+ * @param {(target: {hwnd: number, tabIndex: number}) => void} [onFocus] - Focus callback for toast click
+ */
 function checkStatusChanges(sessions, onFocus) {
   // Prune maps of dead sessions
   const liveCwds = new Set(sessions.filter(s => s.isClaude && s.cwd).map(s => s.cwd));
@@ -76,7 +99,10 @@ function checkStatusChanges(sessions, onFocus) {
   }
 }
 
-// ---- 7-Eleven chime generator ----
+/**
+ * Generate a two-tone WAV chime (E6→B5) as a Buffer.
+ * @returns {Buffer}
+ */
 function generateChimeWav() {
   const sampleRate = 22050;
   const tone1Freq = 1319; // E6
@@ -121,8 +147,10 @@ function generateChimeWav() {
   return Buffer.concat([header, data]);
 }
 
+/** @type {string|null} */
 let chimePath = null;
 let chimeInProgress = false;
+/** Play the chime audio (generates WAV lazily). */
 function playChime() {
   if (chimeInProgress) return;
   try {

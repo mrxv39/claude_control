@@ -18,13 +18,44 @@ const tokenHistory = require('./token-history');
 const analyzer = require('./project-analyzer');
 const skillAnalyzer = require('./skill-analyzer');
 
+/**
+ * @typedef {Object} SchedulerStatus
+ * @property {boolean} running - Task currently executing
+ * @property {boolean} paused
+ * @property {'off-hours'|'idle'|'capacity'|null} currentMode
+ * @property {import('./statusline-writer').RateLimitsOutput|null} rateLimits
+ * @property {import('./token-monitor').PacingDecision|null} pacingDecision
+ * @property {boolean} pacingEnabled
+ * @property {boolean} capacityEnabled
+ * @property {number} capacityThreshold
+ * @property {boolean} outsideWorkHours
+ * @property {boolean} idleEnabled
+ * @property {number} idleMinutes
+ * @property {number} userIdleFor - Minutes idle
+ * @property {boolean} userIsIdle
+ * @property {number} budgetRemaining
+ * @property {number} todaySpent
+ * @property {number} dailyBudget
+ * @property {{start: number, end: number}} workHours
+ * @property {number} pendingTasks
+ * @property {Object|null} runningTask
+ * @property {number} tickInterval - Current tick interval in ms
+ * @property {Object|null} lastTickDebug
+ * @property {string|null} lastMessage
+ */
+
+/** @type {ReturnType<typeof setTimeout>|null} */
 let timer = null;
 let running = false;
 let paused = false;
 let currentInterval = 60 * 1000;
+/** @type {number|null} */
 let lastTaskStart = null;
+/** @type {(() => Promise<Array<{isClaude: boolean, status: string, cwd: string}>>)|null} */
 let getSessionsFn = null;
+/** @type {((status: {state: string, message: string, timestamp: string}) => void)|null} */
 let onStatusChange = null;
+/** @type {Object|null} */
 let lastTickDebug = null;
 
 const STUCK_TIMEOUT = 6 * 60 * 1000; // 6 min — if task runs longer, force reset
@@ -32,6 +63,10 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Check if a skill was recently executed (within 7 days) for a project.
+ * @param {string} project - Project name
+ * @param {string} skill - Skill name
+ * @param {import('./orchestrator-store').LogEntry[]} logEntries
+ * @returns {boolean}
  */
 function wasRecentlyRun(project, skill, logEntries) {
   const cutoff = Date.now() - SEVEN_DAYS_MS;
@@ -51,6 +86,7 @@ const SCORE_SKILLS = [
   { maxScore: 10, skills: ['git-cleanup', 'simplify', 'fix-types', 'pdf', 'ccusage'] },
 ];
 
+/** @returns {boolean} */
 function isOutsideWorkHours() {
   const config = store.load();
   const tz = config.timezone || 'Europe/Madrid';
@@ -74,6 +110,7 @@ function isOutsideWorkHours() {
 /**
  * Returns the set of project paths with active Claude sessions (BUSY).
  * Used to avoid running autonomous tasks on projects the user is working on.
+ * @returns {Promise<Set<string>>}
  */
 async function getBusyProjectPaths() {
   if (!getSessionsFn) return new Set();
@@ -89,6 +126,7 @@ async function getBusyProjectPaths() {
   }
 }
 
+/** @returns {Promise<boolean>} */
 async function hasUserBusySessions() {
   const busy = await getBusyProjectPaths();
   return busy.size > 0;
@@ -121,8 +159,12 @@ function getProjectPriority(name, proj, config) {
   return 'ignored';
 }
 
-// Build ordered skill list per project: primary skills (matching score) first, then rest
-// Filters out inapplicable skills if applicableSkills analysis exists
+/**
+ * Build ordered skill list per project: primary skills (matching score) first, then rest.
+ * Filters out inapplicable skills if applicableSkills analysis exists.
+ * @param {Object} proj - Project data with score and optional applicableSkills
+ * @returns {string[]} Ordered skill names
+ */
 function getSkillsForProject(proj) {
   const score = proj.score || 5;
   let primaryRule = null;
@@ -150,6 +192,9 @@ function getSkillsForProject(proj) {
 /**
  * Get the single highest-impact skill recommendation for a project.
  * Uses Claude's topSkill recommendation when available, falls back to heuristic score tiers.
+ * @param {string} name - Project name
+ * @param {Object} proj - Project data
+ * @returns {{skill: string, reason?: string}|null}
  */
 function getRecommendedSkill(name, proj) {
   const config = store.load();
@@ -186,7 +231,8 @@ function getRecommendedSkill(name, proj) {
 
 /**
  * Auto-enqueue tasks based on project priority and health scores.
- * @param {boolean} burstMode — if true, enqueue up to 10 tasks instead of 5
+ * @param {boolean} [burstMode=false] - If true, enqueue up to 20 tasks instead of 10
+ * @returns {number} Number of tasks enqueued
  */
 function autoEnqueue(burstMode = false) {
   const config = store.load();
@@ -254,6 +300,8 @@ function autoEnqueue(burstMode = false) {
  * Run skill applicability analysis on one project per call.
  * Only for medium/high priority projects without recent analysis.
  * Uses heuristic (free) by default, Claude mode in pace/coast.
+ * @param {string} pacingAction - Current pacing action
+ * @returns {Promise<void>}
  */
 async function maybeRunSkillAnalysis(pacingAction) {
   const config = store.load();
@@ -293,6 +341,9 @@ async function maybeRunSkillAnalysis(pacingAction) {
  * Select next task based on pacing action.
  * burst/accelerate → expensive tasks first (maximize token burn)
  * pace/coast → cheap tasks first (preserve budget)
+ * @param {string} pacingAction
+ * @param {Set<string>} [busyProjectPaths] - Project paths to exclude
+ * @returns {import('./orchestrator-store').QueueTask|null}
  */
 function selectTask(pacingAction, busyProjectPaths) {
   const config = store.load();
@@ -498,6 +549,10 @@ async function tick() {
   running = false;
 }
 
+/**
+ * @param {string} state
+ * @param {string} message
+ */
 function notifyStatus(state, message) {
   if (onStatusChange) onStatusChange({ state, message, timestamp: new Date().toISOString() });
 }
@@ -539,7 +594,7 @@ function start(opts = {}) {
   }, 5000);
 }
 
-/** Stop the scheduler and kill any running tasks. */
+/** Stop the scheduler and kill any running tasks. @returns {void} */
 function stop() {
   if (timer) { clearTimeout(timer); timer = null; }
   executor.emergencyStop();
@@ -557,7 +612,7 @@ function resume() {
   if (!timer) scheduleTick();
 }
 
-/** @returns {{running: boolean, paused: boolean, currentMode: string, rateLimits: Object, pacingDecision: Object}} */
+/** @returns {SchedulerStatus} */
 function getStatus() {
   const config = store.load();
   const idleMin = tokenMonitor.getIdleMinutes();

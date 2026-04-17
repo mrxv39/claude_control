@@ -7,6 +7,11 @@
 
 const { execFile } = require('child_process');
 
+/**
+ * Get the current git branch name.
+ * @param {string} cwd - Project directory
+ * @returns {Promise<string|null>} Branch name or null on error
+ */
 function gitBranch(cwd) {
   return new Promise(resolve => {
     execFile('git', ['branch', '--show-current'], { cwd, timeout: 5000 }, (err, stdout) => {
@@ -15,6 +20,11 @@ function gitBranch(cwd) {
   });
 }
 
+/**
+ * Count uncommitted changes in the working tree.
+ * @param {string} cwd - Project directory
+ * @returns {Promise<number>} Number of changed files
+ */
 function gitDirtyCount(cwd) {
   return new Promise(resolve => {
     execFile('git', ['status', '--porcelain'], { cwd, timeout: 5000 }, (err, stdout) => {
@@ -25,6 +35,12 @@ function gitDirtyCount(cwd) {
   });
 }
 
+/**
+ * Get recent commit messages (one-line format).
+ * @param {string} cwd - Project directory
+ * @param {number} [count=3] - Number of commits to return
+ * @returns {Promise<string[]>} Array of one-line commit strings
+ */
 function gitRecentCommits(cwd, count = 3) {
   return new Promise(resolve => {
     execFile('git', ['log', `--oneline`, `-${count}`], { cwd, timeout: 5000 }, (err, stdout) => {

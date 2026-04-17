@@ -14,6 +14,28 @@
  * Side effect: writes rate-limits.json to ~/.claude/claudio-state/
  */
 
+/**
+ * @typedef {Object} StatusLineInput
+ * @property {{five_hour?: {used_percentage: number, resets_at: number}, seven_day?: {used_percentage: number, resets_at: number}}} [rate_limits]
+ * @property {{used_percentage?: number, total_input_tokens?: number, total_output_tokens?: number, context_window_size?: number}} [context_window]
+ * @property {{total_cost_usd?: number, total_lines_added?: number, total_lines_removed?: number}} [cost]
+ * @property {string} [session_id]
+ * @property {string} [cwd]
+ * @property {{display_name?: string}} [model]
+ */
+
+/**
+ * @typedef {Object} RateLimitsOutput
+ * @property {{usedPercent: number, resetsAt: number}} fiveHour
+ * @property {{usedPercent: number, resetsAt: number}} sevenDay
+ * @property {{usedPercent: number, totalInput: number, totalOutput: number, size: number}} contextWindow
+ * @property {{totalUsd: number, linesAdded: number, linesRemoved: number}} cost
+ * @property {string} sessionId
+ * @property {string} cwd
+ * @property {string} model
+ * @property {number} updatedAt - Date.now() timestamp
+ */
+
 const fs = require('fs');
 const path = require('path');
 

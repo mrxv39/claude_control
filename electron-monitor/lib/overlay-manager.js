@@ -6,24 +6,57 @@
  * the WT window is occluded, minimized, or destroyed.
  */
 
+/**
+ * @typedef {Object} OverlayInfo
+ * @property {Electron.BrowserWindow} win
+ * @property {string} label
+ * @property {string} status - 'BUSY' | 'WAITING' | 'IDLE'
+ * @property {boolean} offscreen - Currently hidden
+ * @property {number} [lastX]
+ * @property {number} [lastY]
+ * @property {number} [lastW]
+ */
+
+/**
+ * @typedef {Object} SkillOverlayInfo
+ * @property {Electron.BrowserWindow} win
+ * @property {string} skill
+ * @property {string} project
+ * @property {string} projectPath
+ * @property {boolean} offscreen
+ * @property {number} [lastX]
+ * @property {number} [lastY]
+ */
+
 const { BrowserWindow } = require('electron');
 const { IsWindow, IsWindowVisible, IsIconic, GetWindowRect, WindowFromPoint, GetAncestor } = require('./win32');
 
-const overlays = new Map(); // hwnd -> { win, label, status, offscreen, lastX, lastY, lastW }
-const skillOverlays = new Map(); // hwnd -> { win, skill, project, projectPath, offscreen, lastX, lastY }
+/** @type {Map<number, OverlayInfo>} hwnd -> overlay state */
+const overlays = new Map();
+/** @type {Map<number, SkillOverlayInfo>} hwnd -> skill button state */
+const skillOverlays = new Map();
 const OVERLAY_H = 33;
 const SKILL_BTN_W = 160;
 const OVERLAY_BTN_MARGIN = 140; // space for WT minimize/maximize/close buttons
 
+/** @type {ReturnType<typeof setInterval>|null} */
 let pollTimer = null;
 let quitting = false;
+/** @type {((project: string, skill: string, projectPath: string) => void)|null} */
 let onClickCb = null;
 
+/** @param {boolean} val */
 function setQuitting(val) { quitting = val; }
+/** @param {(project: string, skill: string, projectPath: string) => void} cb */
 function onSkillClick(cb) { onClickCb = cb; }
 
 const escapeHtml = require('./utils').escapeHtml;
 
+/**
+ * @param {string} label
+ * @param {string} status - 'BUSY' | 'WAITING' | 'IDLE'
+ * @returns {string} data: URL for overlay HTML
+ */
 function overlayHtml(label, status) {
   const safe = escapeHtml(label);
   const bg = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
@@ -34,6 +67,12 @@ function overlayHtml(label, status) {
 </body></html>`);
 }
 
+/**
+ * @param {number} hwnd
+ * @param {string} label
+ * @param {string} status
+ * @returns {Electron.BrowserWindow}
+ */
 function createOverlay(hwnd, label, status) {
   const win = new BrowserWindow({
     width: 400, height: OVERLAY_H,
@@ -51,6 +90,10 @@ function createOverlay(hwnd, label, status) {
   return win;
 }
 
+/**
+ * @param {string} skill
+ * @returns {string} data: URL for skill button HTML
+ */
 function skillButtonHtml(skill) {
   const safe = escapeHtml(skill.length > 14 ? skill.slice(0, 13) + '\u2026' : skill);
   return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
@@ -59,6 +102,13 @@ function skillButtonHtml(skill) {
 </body></html>`);
 }
 
+/**
+ * @param {number} hwnd
+ * @param {string} skill
+ * @param {string} project
+ * @param {string} projectPath
+ * @returns {Electron.BrowserWindow}
+ */
 function createSkillOverlay(hwnd, skill, project, projectPath) {
   const win = new BrowserWindow({
     width: SKILL_BTN_W, height: OVERLAY_H,
@@ -88,6 +138,11 @@ function createSkillOverlay(hwnd, skill, project, projectPath) {
   return win;
 }
 
+/**
+ * Sync skill recommendation buttons to WT windows.
+ * @param {Array<{hwnd: number, project: string}>} sessions
+ * @param {Object<string, {skill: string, projectPath: string}>} recommendations
+ */
 function syncSkillButtons(sessions, recommendations) {
   const live = new Map();
   for (const s of sessions) {
@@ -119,6 +174,10 @@ function syncSkillButtons(sessions, recommendations) {
   }
 }
 
+/**
+ * Sync title overlays to match current session list.
+ * @param {Array<{hwnd: number, project: string, status: string}>} sessions
+ */
 function syncOverlays(sessions) {
   const live = new Map();
   for (const s of sessions) {

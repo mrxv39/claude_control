@@ -3,12 +3,32 @@
  * and rate-limits for the Stats dashboard tab.
  */
 
+/**
+ * @typedef {Object} DashboardStats
+ * @property {import('./token-history').CycleEntry[]} cycleChart - Last 20 cycle snapshots
+ * @property {{todayUsd: number, weekUsd: number, monthUsd: number, weekRuns: number, monthRuns: number}} costSummary
+ * @property {Object<string, {total: number, done: number, failed: number}>} activityBySkill
+ * @property {number} totalBranches - Branches created with changes
+ * @property {Array<{project: string, count: number}>} projectHeatmap - Top 15 projects by run count
+ */
+
+/**
+ * @typedef {Object} LiveCycleInfo
+ * @property {number} usedPercent - Current 5h usage
+ * @property {number} targetPercent - Pacing target usage
+ * @property {number} progress - 0..1 cycle progress
+ * @property {number} remainingMin - Minutes until cycle reset
+ * @property {number} sevenDayPercent - 7-day usage
+ * @property {string} action - Pacing action (burst|accelerate|pace|coast|wait)
+ */
+
 const store = require('./orchestrator-store');
 const tokenHistory = require('./token-history');
 const tokenMonitor = require('./token-monitor');
 
 /**
  * Returns all dashboard data in a single object.
+ * @returns {DashboardStats}
  */
 function getDashboardStats() {
   // Last 20 cycles from token-history.jsonl
@@ -80,6 +100,7 @@ function getDashboardStats() {
 
 /**
  * Returns live cycle info for the real-time indicator.
+ * @returns {LiveCycleInfo|null}
  */
 function getLiveCycle() {
   const cycle = tokenMonitor.getCycleInfo();

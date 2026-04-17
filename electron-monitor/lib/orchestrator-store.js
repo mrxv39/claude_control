@@ -7,18 +7,60 @@
  */
 
 /**
+ * @typedef {Object} QueueTask
+ * @property {string} id - Unique task ID
+ * @property {string} project - Project name
+ * @property {string} skill - Skill to execute
+ * @property {string} [projectPath] - Absolute path to project
+ * @property {'pending'|'running'|'done'|'failed'} status
+ * @property {string} createdAt - ISO timestamp
+ * @property {string} [startedAt] - ISO timestamp
+ * @property {string} [completedAt] - ISO timestamp
+ * @property {string} [branch] - Git branch created
+ * @property {number} [costUsd]
+ * @property {number} [duration] - Seconds
+ * @property {boolean} [hasChanges]
+ * @property {boolean} [auto] - Auto-enqueued by scheduler
+ * @property {boolean} [retried]
+ * @property {string} [mode] - Execution mode (off-hours|idle|capacity)
+ */
+
+/**
+ * @typedef {Object} LogEntry
+ * @property {string} skill
+ * @property {'done'|'failed'} status
+ * @property {string} [project]
+ * @property {string} [branch]
+ * @property {string} [taskId]
+ * @property {string} timestamp - ISO timestamp
+ * @property {number} [costUsd]
+ * @property {number} [duration]
+ * @property {boolean} [hasChanges]
+ */
+
+/**
  * @typedef {Object} OrchestratorConfig
  * @property {string[]} projectDirs
  * @property {{start: number, end: number}} workHours
  * @property {number} dailyBudgetUsd
  * @property {number} todaySpentUsd
- * @property {string} todayDate
- * @property {Object<string, Object>} projects
- * @property {Object[]} queue
- * @property {string} timezone
+ * @property {string} todayDate - YYYY-MM-DD
+ * @property {string|null} lastFullScan - ISO timestamp
+ * @property {string[]} blacklist - Project names to ignore
+ * @property {{high: number, medium: number, low: number}} priorityRules - Max days per priority tier
+ * @property {Object<string, 'high'|'medium'|'low'|'ignored'>} priorityOverrides
+ * @property {boolean} idleEnabled
+ * @property {number} idleMinutes
+ * @property {boolean} capacityEnabled
+ * @property {number} capacityThreshold
  * @property {boolean} pacingEnabled
- * @property {number} pacingMaxTarget
- * @property {number} pacingExponent
+ * @property {number} pacingMaxTarget - Max % to aim for in 5h cycle
+ * @property {number} pacingExponent - Curve shape (lower = more conservative early)
+ * @property {number} sevenDayThrottle - Coast when 7d > this %
+ * @property {number} sevenDayCaution - Reduce target when 7d > this %
+ * @property {string} timezone - IANA timezone (e.g. 'Europe/Madrid')
+ * @property {Object<string, Object>} projects - Project name -> project data
+ * @property {QueueTask[]} queue
  */
 
 const fs = require('fs');
@@ -93,16 +135,22 @@ function update(partial) {
 
 // --- Project helpers ---
 
+/** @returns {Object<string, Object>} All projects keyed by name */
 function getProjects() {
   return load().projects;
 }
 
+/**
+ * @param {string} name
+ * @param {Object} info - Project data to store
+ */
 function setProject(name, info) {
   const data = load();
   data.projects[name] = info;
   save(data);
 }
 
+/** @param {Object<string, Object>} projects */
 function setProjects(projects) {
   const data = load();
   data.projects = projects;
@@ -111,6 +159,7 @@ function setProjects(projects) {
 
 // --- Queue helpers ---
 
+/** @returns {QueueTask[]} */
 function getQueue() {
   return load().queue;
 }
@@ -126,12 +175,18 @@ function enqueue(task) {
   return task;
 }
 
+/** @param {string} taskId */
 function dequeue(taskId) {
   const data = load();
   data.queue = data.queue.filter(t => t.id !== taskId);
   save(data);
 }
 
+/**
+ * @param {string} taskId
+ * @param {Partial<QueueTask>} partial
+ * @returns {QueueTask|null}
+ */
 function updateQueueTask(taskId, partial) {
   const data = load();
   const task = data.queue.find(t => t.id === taskId);
@@ -140,6 +195,7 @@ function updateQueueTask(taskId, partial) {
   return task || null;
 }
 
+/** @returns {QueueTask|null} */
 function nextPendingTask() {
   const data = load();
   return data.queue.find(t => t.status === 'pending') || null;
@@ -147,6 +203,11 @@ function nextPendingTask() {
 
 // --- Budget helpers ---
 
+/**
+ * Add to today's spend. Resets if date changed.
+ * @param {number} usd
+ * @returns {OrchestratorConfig}
+ */
 function addSpend(usd) {
   const data = load();
   const today = new Date().toISOString().slice(0, 10);
@@ -159,6 +220,7 @@ function addSpend(usd) {
   return data;
 }
 
+/** @returns {number} Remaining daily budget in USD */
 function budgetRemaining() {
   const data = load();
   const today = new Date().toISOString().slice(0, 10);

@@ -94,8 +94,8 @@ function unregisterAppBar(hwnd) {
 }
 
 /**
- * Enumerate all Windows Terminal windows.
- * @returns {Map<number, Array<{hwnd: number, title: string}>>} Map of WT PID -> windows
+ * Enumerate all Windows Terminal windows by iterating CASCADIA_HOSTING_WINDOW_CLASS.
+ * @returns {Map<number, Array<{hwnd: number, title: string}>>} WT PID -> list of windows
  */
 function enumWtWindows() {
   const map = new Map();
@@ -119,6 +119,7 @@ function enumWtWindows() {
 /**
  * Focus a window, restoring it first if minimized.
  * Uses Alt key trick to bypass SetForegroundWindow restrictions.
+ * @param {number} hwnd - Native window handle
  */
 function focusWindow(hwnd) {
   if (IsIconic(hwnd)) ShowWindow(hwnd, 9);

@@ -5,23 +5,40 @@
  * Used to trigger autonomous task execution when the user is idle.
  */
 
+/**
+ * @typedef {Object} CycleInfo
+ * @property {number} usedPercent - Current 5h usage %
+ * @property {number} sevenDayPercent - 7-day usage %
+ * @property {number} remainingMin - Minutes until cycle reset
+ * @property {number} progress - 0..1 elapsed fraction of 5h cycle
+ * @property {number} resetsAt - Unix timestamp (seconds) when cycle resets
+ * @property {boolean} isStale - true if rate data is >10 min old
+ */
+
+/**
+ * @typedef {Object} PacingDecision
+ * @property {'burst'|'accelerate'|'pace'|'coast'|'wait'} action
+ * @property {string} reason - Human-readable explanation
+ * @property {CycleInfo} [cycle]
+ * @property {number} [targetUsage] - Target % at current progress
+ * @property {number} [delta] - targetUsage - usedPercent
+ */
+
 const fs = require('fs');
 const path = require('path');
 
 const PROJECTS_DIR = path.join(process.env.USERPROFILE, '.claude', 'projects');
 const RATE_LIMITS_PATH = path.join(process.env.USERPROFILE, '.claude', 'claudio-state', 'rate-limits.json');
 
-// Cache for getLastUserActivity — avoids rescanning all JSONL dirs on every tick
+/** @type {{ts: Date|null, at: number}} */
 let _activityCache = { ts: null, at: 0 };
 const ACTIVITY_CACHE_TTL = 30 * 1000; // 30s — idle detection doesn't need sub-second precision
 
 /**
  * Get the timestamp of the most recent user message across all sessions.
  * Reads the tail of each JSONL file looking for "type":"user" entries.
- * Returns Date or null if no recent activity found.
- *
- * Results are cached for 30s to avoid rescanning all JSONL dirs on every
- * scheduler tick (the scan reads directories + file tails across all projects).
+ * Results are cached for 30s to reduce I/O.
+ * @returns {Date|null}
  */
 function getLastUserActivity() {
   const now = Date.now();
@@ -82,6 +99,8 @@ function getLastUserActivity() {
 /**
  * Read the tail of a JSONL file and find the last "type":"user" timestamp.
  * Only reads the last 8KB for performance.
+ * @param {string} filePath
+ * @returns {Date|null}
  */
 function getLastUserTimestampFromFile(filePath) {
   try {
@@ -121,7 +140,7 @@ function getLastUserTimestampFromFile(filePath) {
 
 /**
  * Get minutes since the last user activity.
- * Returns Infinity if no activity detected.
+ * @returns {number} Minutes idle, or Infinity if no activity detected
  */
 function getIdleMinutes() {
   const lastActivity = getLastUserActivity();
@@ -132,6 +151,8 @@ function getIdleMinutes() {
 /**
  * Check if the user is considered idle (no activity for N minutes).
  * Uses both JSONL timestamps AND file modification times for reliability.
+ * @param {number} [minutes=15]
+ * @returns {boolean}
  */
 function isUserIdle(minutes = 15) {
   // Primary: check JSONL user messages (cached, cheap after first call)
@@ -164,14 +185,13 @@ function isUserIdle(minutes = 15) {
   return true;
 }
 
-// Cache for getRateLimits — file is only written every ~10s by statusline hook
+/** @type {{data: import('./statusline-writer').RateLimitsOutput|null, at: number}} */
 let _rateLimitsCache = { data: null, at: 0 };
 const RATE_LIMITS_CACHE_TTL = 5 * 1000; // 5s — sufficient since file updates every ~10s
 
 /**
  * Read rate limits from the shared file written by statusline-writer.js.
- * Returns { fiveHour: { usedPercent, resetsAt }, sevenDay: { usedPercent, resetsAt }, updatedAt }
- * or null if no data available.
+ * @returns {import('./statusline-writer').RateLimitsOutput|null} null if stale or missing
  */
 function getRateLimits() {
   const now = Date.now();
@@ -202,6 +222,7 @@ function getRateLimits() {
 /**
  * Get enriched cycle state from rate limits data.
  * Derives progress (0..1), remaining minutes, and staleness from resetsAt.
+ * @returns {CycleInfo|null}
  */
 function getCycleInfo() {
   const rl = getRateLimits();
@@ -230,9 +251,8 @@ function getCycleInfo() {
  * parameterized by time elapsed in the 5h cycle.
  *
  * Curve: targetUsage = progress^exponent × maxTarget
- * Returns { action, reason, cycle, targetUsage, delta }
- *
- * Actions: 'burst' | 'accelerate' | 'pace' | 'coast' | 'wait'
+ * @param {{pacingMaxTarget?: number, pacingExponent?: number, sevenDayThrottle?: number, sevenDayCaution?: number}} [config]
+ * @returns {PacingDecision}
  */
 function getPacingDecision(config = {}) {
   const maxTarget = config.pacingMaxTarget || 95;
@@ -280,6 +300,8 @@ function getPacingDecision(config = {}) {
 
 /**
  * Recommended scheduler tick interval based on pacing action.
+ * @param {string} action - Pacing action
+ * @returns {number} Interval in milliseconds
  */
 function getRecommendedInterval(action) {
   switch (action) {
@@ -294,8 +316,8 @@ function getRecommendedInterval(action) {
 /**
  * Check if there's spare capacity in the 5-hour window.
  * Delegates to pacing decision for backward compatibility.
- * @param {number} threshold — ignored when pacing is active
- * @returns {boolean} true if pacing says execute
+ * @param {number} [threshold=50] - Ignored when pacing is active
+ * @returns {boolean} true if pacing says execute (not coast/wait)
  */
 function hasSpareCapacity(threshold = 50) {
   const decision = getPacingDecision();

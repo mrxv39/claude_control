@@ -6,6 +6,23 @@
  * Never touches master. Never pushes.
  */
 
+/**
+ * @typedef {Object} SkillDef
+ * @property {'opus'|'sonnet'} model
+ * @property {string} prompt
+ */
+
+/**
+ * @typedef {Object} ExecutionResult
+ * @property {'done'|'failed'} status
+ * @property {string|null} [branch] - Git branch with changes (null if no changes)
+ * @property {string} [error] - Error message on failure
+ * @property {number} [costUsd]
+ * @property {string} logFile - Path to run log
+ * @property {number} [duration] - Seconds
+ * @property {boolean} [hasChanges]
+ */
+
 const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -13,8 +30,7 @@ const store = require('./orchestrator-store');
 
 const RUNS_DIR = path.join(store.STATE_DIR, 'runs');
 
-// Skill definitions: prompt, model
-// Models: opus for deep analysis, sonnet for lighter tasks
+/** @type {Object<string, SkillDef>} */
 const SKILLS = {
   'audit-claude-md': {
     model: 'sonnet',
@@ -170,7 +186,9 @@ function ensureRunsDir() {
 
 /**
  * Create a git branch for the autonomous work.
- * Returns true if branch created, false if failed.
+ * @param {string} cwd - Project directory
+ * @param {string} skill - Skill name (used in branch name)
+ * @returns {Promise<string|null>} Branch name or null on failure
  */
 function createBranch(cwd, skill) {
   const date = new Date().toISOString().slice(0, 10);
@@ -192,6 +210,8 @@ function createBranch(cwd, skill) {
 
 /**
  * Return to the main branch (master or main).
+ * @param {string} cwd
+ * @returns {Promise<void>}
  */
 async function returnToMainBranch(cwd) {
   const main = await getMainBranch(cwd);
@@ -202,6 +222,8 @@ async function returnToMainBranch(cwd) {
 
 /**
  * Detect the main branch name (master or main).
+ * @param {string} cwd
+ * @returns {Promise<'master'|'main'>}
  */
 function getMainBranch(cwd) {
   return new Promise(resolve => {
@@ -213,6 +235,8 @@ function getMainBranch(cwd) {
 
 /**
  * Check if current branch has changes vs the main branch.
+ * @param {string} cwd
+ * @returns {Promise<boolean>}
  */
 async function branchHasCommits(cwd) {
   const main = await getMainBranch(cwd);
@@ -224,7 +248,10 @@ async function branchHasCommits(cwd) {
 }
 
 /**
- * Delete a branch if it has no changes.
+ * Delete a branch (used to clean up branches with no changes).
+ * @param {string} cwd
+ * @param {string} branch
+ * @returns {Promise<void>}
  */
 function cleanupEmptyBranch(cwd, branch) {
   return new Promise(resolve => {
@@ -234,10 +261,9 @@ function cleanupEmptyBranch(cwd, branch) {
 
 /**
  * Execute a skill on a project. Returns execution result.
- *
- * @param {Object} task - { id, project, skill, projectPath }
- * @param {Function} onProgress - callback(line) for live output
- * @returns {Object} { status, branch, costUsd, logFile, duration }
+ * @param {import('./orchestrator-store').QueueTask} task - Must have id, project, skill, projectPath
+ * @param {(line: string) => void} [onProgress] - Callback for live output lines
+ * @returns {Promise<ExecutionResult>}
  */
 async function execute(task, onProgress) {
   const skill = SKILLS[task.skill];
@@ -374,6 +400,7 @@ async function execute(task, onProgress) {
 
 /**
  * Kill all currently running executions.
+ * @returns {boolean} true if any processes were killed
  */
 function emergencyStop() {
   if (!execute._procs || execute._procs.size === 0) return false;

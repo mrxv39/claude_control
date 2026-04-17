@@ -6,14 +6,36 @@
  * of average token usage per cycle.
  */
 
+/**
+ * @typedef {Object} CycleEntry
+ * @property {number} resetsAt - Unix timestamp when the 5h cycle resets
+ * @property {string} capturedAt - ISO timestamp of capture
+ * @property {number} fiveHourPercent - Usage % at capture
+ * @property {number} sevenDayPercent - 7-day usage % at capture
+ * @property {number|null} costUsd - Session cost at capture
+ * @property {string|null} model - Model in use at capture
+ */
+
+/**
+ * @typedef {Object} CycleStats
+ * @property {number} count - Total recorded cycles
+ * @property {number} avgUsedPercent - Average 5h usage
+ * @property {number} minUsedPercent
+ * @property {number} maxUsedPercent
+ * @property {number} avgCostUsd - Average cost per cycle
+ * @property {CycleEntry[]} recentCycles - Last 10 entries
+ */
+
 const fs = require('fs');
 const path = require('path');
 
 const STATE_DIR = path.join(process.env.USERPROFILE, '.claude', 'claudio-state');
 const HISTORY_PATH = path.join(STATE_DIR, 'token-history.jsonl');
 
+/** @type {number|null} */
 let lastSavedResetAt = null;
 
+/** Ensure the state directory exists. */
 function ensureDir() {
   if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
 }
@@ -36,6 +58,9 @@ function initLastSaved() {
 /**
  * Called on every scheduler tick. Captures a snapshot if the cycle
  * is about to reset and we haven't already saved this cycle.
+ * @param {{remainingMin: number, resetsAt: number, usedPercent: number, sevenDayPercent: number, isStale: boolean}} cycleInfo
+ * @param {RateLimitsOutput} rateLimits
+ * @returns {boolean} true if a snapshot was captured
  */
 function maybeCaptureCycleEnd(cycleInfo, rateLimits) {
   if (!cycleInfo || !rateLimits) return false;
@@ -60,6 +85,8 @@ function maybeCaptureCycleEnd(cycleInfo, rateLimits) {
 
 /**
  * Read the last N entries from the history file.
+ * @param {number} [maxLines=50]
+ * @returns {CycleEntry[]}
  */
 function readHistory(maxLines = 50) {
   if (!fs.existsSync(HISTORY_PATH)) return [];
@@ -75,6 +102,7 @@ function readHistory(maxLines = 50) {
 
 /**
  * Compute stats over recorded cycles.
+ * @returns {CycleStats}
  */
 function getStats() {
   const entries = readHistory(500);
