@@ -17,6 +17,9 @@ const overlayManager = require('./lib/overlay-manager');
 const notifications = require('./lib/notifications');
 const license = require('./lib/license');
 const telemetry = require('./lib/telemetry');
+const autonomousStore = require('./lib/autonomous-store');
+const { AutonomousOrchestrator } = require('./lib/autonomous-orchestrator');
+const tokenReport = require('./lib/token-report');
 
 const {
   FindWindowA, ShowWindow, IsIconic, IsWindow, MoveWindow,
@@ -30,6 +33,7 @@ const SW_RESTORE = 9;
 let mainWindow;
 let tray = null;
 let firstShowDone = false;   // bar created with show:false until first resize-bar
+let autoOrchestrator = null; // AutonomousOrchestrator instance (starts in dry-run)
 
 // Git cache for overlay titles (branch + dirty per cwd, 30s TTL)
 const mainGitCache = {};     // cwd -> { branch, dirty }
@@ -614,6 +618,64 @@ ipcMain.handle('activate', async (_ev, { email, name }) => {
   }
 });
 
+// ---- IPC: autonomous orchestrator (new system, F1+) ----
+
+ipcMain.handle('auto:get-config', () => autonomousStore.getConfig());
+ipcMain.handle('auto:update-config', (_ev, partial) => autonomousStore.updateConfig(partial));
+ipcMain.handle('auto:get-project', (_ev, name) => autonomousStore.getProject(name));
+ipcMain.handle('auto:update-project', (_ev, name, patch) => autonomousStore.updateProject(name, patch));
+ipcMain.handle('auto:toggle-active', (_ev, name, active) => autonomousStore.toggleActive(name, active));
+ipcMain.handle('auto:set-objective', (_ev, name, objective) => autonomousStore.setObjective(name, objective));
+ipcMain.handle('auto:get-events', (_ev, n) => autonomousStore.readEvents(n || 200));
+
+ipcMain.handle('auto:get-status', () => {
+  if (!autoOrchestrator) return { running: false, dryRun: true };
+  return {
+    running: autoOrchestrator.isRunning(),
+    dryRun: autoOrchestrator.isDryRun(),
+    lastTickAt: autoOrchestrator.getLastTickAt(),
+    lastTickResult: autoOrchestrator.getLastTickResult(),
+  };
+});
+
+ipcMain.handle('auto:set-dry-run', (_ev, dryRun) => {
+  if (!autoOrchestrator) return false;
+  autoOrchestrator.setDryRun(!!dryRun);
+  return true;
+});
+
+ipcMain.handle('auto:tick-now', async () => {
+  if (!autoOrchestrator) return { action: 'skip', reason: 'orchestrator not running' };
+  return autoOrchestrator.runTickNow();
+});
+
+ipcMain.handle('auto:start', () => {
+  if (!autoOrchestrator) return false;
+  autoOrchestrator.start();
+  return true;
+});
+
+ipcMain.handle('auto:stop', () => {
+  if (!autoOrchestrator) return false;
+  autoOrchestrator.stop();
+  return true;
+});
+
+ipcMain.handle('auto:token-report', (_ev, opts) => {
+  const entries = tokenHistory.readHistory(500);
+  const events = autonomousStore.readEvents(2000);
+  return {
+    summary: tokenReport.summarize(entries, opts),
+    byDay: tokenReport.bucketByDay(entries),
+    rankedCycles: tokenReport.rankCycles(entries, events, { limit: 30 }),
+  };
+});
+
+ipcMain.handle('auto:token-avg', (_ev, windowDays) => {
+  const entries = tokenHistory.readHistory(500);
+  return tokenReport.computeAverage(entries, { windowDays: windowDays || 7 });
+});
+
 ipcMain.handle('track', (_ev, type, payload) => {
   try { telemetry.trackEvent(type, payload || {}); }
   catch {}
@@ -725,6 +787,24 @@ app.whenReady().then(async () => {
         }
       }
     });
+
+    // Start the autonomous orchestrator (goal-driven, LLM planner).
+    // Starts in DRY-RUN mode — it observes and decides, but does NOT execute.
+    // Coexists safely with the queue-based scheduler above. Toggle with
+    // `auto:set-dry-run` IPC once the new UI is wired.
+    autoOrchestrator = new AutonomousOrchestrator({
+      getConfig: async () => autonomousStore.getConfig(),
+      analyze: async (project) => analyzer.analyze(project),
+      updateProject: async (name, patch) => autonomousStore.updateProject(name, patch),
+      dryRun: true,
+      onEvent: (event) => {
+        autonomousStore.appendEvent(event);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('auto:event', event);
+        }
+      },
+    });
+    autoOrchestrator.start();
   });
 });
 app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
@@ -735,6 +815,7 @@ app.on('before-quit', async () => {
   appBarUnregister();
   overlayManager.setQuitting(true);
   scheduler.stop();
+  try { if (autoOrchestrator) autoOrchestrator.stop(); } catch {}
   overlayManager.stopLoop();
   overlayManager.destroyAll();
 });
