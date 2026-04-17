@@ -26,3 +26,8 @@ out/
 
 # Legacy SessionMonitor logs
 SessionMonitor/*_log.txt
+
+# Generated maintenance forms and temp files
+docs/maintenance-form-*.html
+docs/maintenance-decisions.json
+docs/.maintenance-port
