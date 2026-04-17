@@ -30,6 +30,9 @@ const store = require('./orchestrator-store');
 
 const RUNS_DIR = path.join(store.STATE_DIR, 'runs');
 
+/** @type {Map<string, import('child_process').ChildProcess>} */
+const _procs = new Map();
+
 /** @type {Object<string, SkillDef>} */
 const SKILLS = {
   'audit-claude-md': {
@@ -180,9 +183,8 @@ Aplica fixes para issues críticos (secrets, falta de error handling). Documenta
 const WATCHDOG_MS = 8 * 60 * 1000; // 8 min hard kill
 const IDLE_TIMEOUT_MS = 120 * 1000; // 2 min without output = hung
 
-function ensureRunsDir() {
-  if (!fs.existsSync(RUNS_DIR)) fs.mkdirSync(RUNS_DIR, { recursive: true });
-}
+// Create runs directory once at load time (recursive is a no-op if it exists)
+try { fs.mkdirSync(RUNS_DIR, { recursive: true }); } catch {}
 
 /**
  * Create a git branch for the autonomous work.
@@ -236,10 +238,11 @@ function getMainBranch(cwd) {
 /**
  * Check if current branch has changes vs the main branch.
  * @param {string} cwd
+ * @param {string} [mainBranch] - Pre-resolved main branch name
  * @returns {Promise<boolean>}
  */
-async function branchHasCommits(cwd) {
-  const main = await getMainBranch(cwd);
+async function branchHasCommits(cwd, mainBranch) {
+  const main = mainBranch || await getMainBranch(cwd);
   return new Promise(resolve => {
     execFile('git', ['diff', `${main}...HEAD`, '--stat'], { cwd, timeout: 5000 }, (err, stdout) => {
       resolve(!err && stdout && stdout.trim().length > 0);
@@ -271,7 +274,6 @@ async function execute(task, onProgress) {
     return { status: 'failed', error: `Unknown skill: ${task.skill}`, costUsd: 0 };
   }
 
-  ensureRunsDir();
   const logFile = path.join(RUNS_DIR, `${task.id}.log`);
   const logStream = fs.createWriteStream(logFile, { flags: 'a' });
   const startTime = Date.now();
@@ -304,7 +306,6 @@ async function execute(task, onProgress) {
       shell: false
     });
 
-    // Close stdin immediately — --print doesn't need input
     proc.stdin.end();
 
     // Manual watchdog: kill process after WATCHDOG_MS
@@ -345,8 +346,9 @@ async function execute(task, onProgress) {
       logStream.write(`\n=== Finished (code ${code}) in ${duration}s ===\n`);
       logStream.end();
 
-      // Check if branch has actual changes
-      const hasChanges = await branchHasCommits(task.projectPath);
+      // Resolve main branch once for both checks
+      const mainBranch = await getMainBranch(task.projectPath);
+      const hasChanges = await branchHasCommits(task.projectPath, mainBranch);
 
       // Return to master
       await returnToMainBranch(task.projectPath);
@@ -391,10 +393,8 @@ async function execute(task, onProgress) {
       });
     });
 
-    // Store process reference for emergency stop
-    if (!execute._procs) execute._procs = new Map();
-    execute._procs.set(task.id, proc);
-    proc.on('close', () => execute._procs.delete(task.id));
+    _procs.set(task.id, proc);
+    proc.on('close', () => _procs.delete(task.id));
   });
 }
 
@@ -403,11 +403,11 @@ async function execute(task, onProgress) {
  * @returns {boolean} true if any processes were killed
  */
 function emergencyStop() {
-  if (!execute._procs || execute._procs.size === 0) return false;
-  for (const [id, proc] of execute._procs) {
+  if (_procs.size === 0) return false;
+  for (const [, proc] of _procs) {
     try { proc.kill('SIGTERM'); } catch {}
   }
-  execute._procs.clear();
+  _procs.clear();
   return true;
 }
 

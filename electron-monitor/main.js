@@ -15,7 +15,6 @@ const win32 = require('./lib/win32');
 const overlayManager = require('./lib/overlay-manager');
 const notifications = require('./lib/notifications');
 
-// Destructure win32 for direct use
 const {
   FindWindowA, ShowWindow, IsIconic, IsWindow, MoveWindow,
   GetWindowRect, IsWindowVisible, keybd_event, enumWtWindows, focusWindow,
@@ -323,9 +322,10 @@ ipcMain.handle('get-sessions', async () => {
     // Sync skill recommendation buttons on overlays
     try {
       const config = store.load();
+      const recentLog = store.readLog(100);
       const recs = {};
       for (const [name, proj] of Object.entries(config.projects || {})) {
-        const rec = scheduler.getRecommendedSkill(name, proj);
+        const rec = scheduler.getRecommendedSkill(name, proj, { config, recentLog });
         if (rec) recs[name] = { skill: rec.skill, projectPath: proj.path };
       }
       overlayManager.syncSkillButtons(arr, recs);
@@ -367,10 +367,12 @@ function resolveScript(name) {
   return path.join(process.resourcesPath, name);
 }
 
+const CLAUDE_SETTINGS_PATH = path.join(process.env.USERPROFILE, '.claude', 'settings.json');
+
 // ---- Auto-setup statusLine ----
 function setupStatusLine() {
   try {
-    const settingsPath = path.join(process.env.USERPROFILE, '.claude', 'settings.json');
+    const settingsPath = CLAUDE_SETTINGS_PATH;
     if (!fs.existsSync(settingsPath)) return;
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     if (settings.statusLine && settings.statusLine.includes('statusline-writer') && !settings.statusLine.includes('\\\\\\\\')) return;
@@ -385,9 +387,8 @@ function setupStatusLine() {
 // ---- Auto-setup hook check ----
 function checkHookSetup() {
   try {
-    const settingsPath = path.join(process.env.USERPROFILE, '.claude', 'settings.json');
-    if (!fs.existsSync(settingsPath)) { mainWindow.webContents.send('hook-missing'); return; }
-    const content = fs.readFileSync(settingsPath, 'utf-8');
+    if (!fs.existsSync(CLAUDE_SETTINGS_PATH)) { mainWindow.webContents.send('hook-missing'); return; }
+    const content = fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf-8');
     if (!content.includes('claude-state-hook')) {
       mainWindow.webContents.send('hook-missing');
     }

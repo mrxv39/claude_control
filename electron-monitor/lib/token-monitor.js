@@ -148,6 +148,10 @@ function getIdleMinutes() {
   return (Date.now() - lastActivity.getTime()) / (60 * 1000);
 }
 
+/** @type {{result: boolean, at: number}} */
+let _recentWriteCache = { result: false, at: 0 };
+const RECENT_WRITE_CACHE_TTL = 10 * 1000; // 10s — avoids re-scanning dirs on every call
+
 /**
  * Check if the user is considered idle (no activity for N minutes).
  * Uses both JSONL timestamps AND file modification times for reliability.
@@ -155,34 +159,40 @@ function getIdleMinutes() {
  * @returns {boolean}
  */
 function isUserIdle(minutes = 15) {
-  // Primary: check JSONL user messages (cached, cheap after first call)
   const idleTime = getIdleMinutes();
   if (idleTime < minutes) return false;
 
   // Secondary: check if any JSONL was modified in the last 2 min (user mid-prompt).
-  // Only scan recently-modified dirs to avoid full directory walk.
+  // Cached for 10s to avoid redundant directory walks when called multiple times per tick.
+  const now = Date.now();
+  if (_recentWriteCache.at && (now - _recentWriteCache.at) < RECENT_WRITE_CACHE_TTL) {
+    return !_recentWriteCache.result;
+  }
+
+  let hasRecentWrite = false;
   try {
     const projectDirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory());
 
-    const cutoff = Date.now() - 2 * 60 * 1000;
+    const cutoff = now - 2 * 60 * 1000;
     for (const dir of projectDirs) {
       const dirPath = path.join(PROJECTS_DIR, dir.name);
       try {
-        // Quick check: if the directory itself wasn't modified recently, skip it
         const dirStat = fs.statSync(dirPath);
         if (dirStat.mtimeMs < cutoff) continue;
 
         const files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
         for (const file of files) {
           const stat = fs.statSync(path.join(dirPath, file));
-          if (stat.mtimeMs > cutoff) return false; // file modified in last 2 min → not idle
+          if (stat.mtimeMs > cutoff) { hasRecentWrite = true; break; }
         }
+        if (hasRecentWrite) break;
       } catch {}
     }
   } catch {}
 
-  return true;
+  _recentWriteCache = { result: hasRecentWrite, at: now };
+  return !hasRecentWrite;
 }
 
 /** @type {{data: import('./statusline-writer').RateLimitsOutput|null, at: number}} */
@@ -315,14 +325,11 @@ function getRecommendedInterval(action) {
 
 /**
  * Check if there's spare capacity in the 5-hour window.
- * Delegates to pacing decision for backward compatibility.
- * @param {number} [threshold=50] - Ignored when pacing is active
  * @returns {boolean} true if pacing says execute (not coast/wait)
  */
-function hasSpareCapacity(threshold = 50) {
+function hasSpareCapacity() {
   const decision = getPacingDecision();
-  if (decision.action === 'wait') return false;
-  return decision.action !== 'coast';
+  return decision.action !== 'wait' && decision.action !== 'coast';
 }
 
 module.exports = {

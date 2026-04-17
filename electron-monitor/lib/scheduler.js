@@ -41,7 +41,6 @@ const skillAnalyzer = require('./skill-analyzer');
  * @property {Object|null} runningTask
  * @property {number} tickInterval - Current tick interval in ms
  * @property {Object|null} lastTickDebug
- * @property {string|null} lastMessage
  */
 
 /** @type {ReturnType<typeof setTimeout>|null} */
@@ -86,9 +85,12 @@ const SCORE_SKILLS = [
   { maxScore: 10, skills: ['git-cleanup', 'simplify', 'fix-types', 'pdf', 'ccusage'] },
 ];
 
-/** @returns {boolean} */
-function isOutsideWorkHours() {
-  const config = store.load();
+/**
+ * @param {OrchestratorConfig} [config] - Pre-loaded config (avoids extra disk read)
+ * @returns {boolean}
+ */
+function isOutsideWorkHours(config) {
+  if (!config) config = store.load();
   const tz = config.timezone || 'Europe/Madrid';
   let hour;
   try {
@@ -104,8 +106,6 @@ function isOutsideWorkHours() {
     return hour >= end && hour < start;
   }
 }
-
-// Budget disabled for Max plan — tokens are prepaid, unused = wasted
 
 /**
  * Returns the set of project paths with active Claude sessions (BUSY).
@@ -194,14 +194,17 @@ function getSkillsForProject(proj) {
  * Uses Claude's topSkill recommendation when available, falls back to heuristic score tiers.
  * @param {string} name - Project name
  * @param {Object} proj - Project data
+ * @param {Object} [opts] - Optional pre-loaded data to avoid redundant disk reads
+ * @param {OrchestratorConfig} [opts.config]
+ * @param {import('./orchestrator-store').LogEntry[]} [opts.recentLog]
  * @returns {{skill: string, reason?: string}|null}
  */
-function getRecommendedSkill(name, proj) {
-  const config = store.load();
+function getRecommendedSkill(name, proj, opts) {
+  const config = (opts && opts.config) || store.load();
   const priority = getProjectPriority(name, proj, config);
   if (priority === 'ignored') return null;
 
-  const recentLog = store.readLog(100);
+  const recentLog = (opts && opts.recentLog) || store.readLog(100);
   const busySkills = new Set(
     config.queue
       .filter(t => t.project === name && (t.status === 'pending' || t.status === 'running'))
@@ -343,10 +346,11 @@ async function maybeRunSkillAnalysis(pacingAction) {
  * pace/coast → cheap tasks first (preserve budget)
  * @param {string} pacingAction
  * @param {Set<string>} [busyProjectPaths] - Project paths to exclude
+ * @param {OrchestratorConfig} [config] - Pre-loaded config
  * @returns {import('./orchestrator-store').QueueTask|null}
  */
-function selectTask(pacingAction, busyProjectPaths) {
-  const config = store.load();
+function selectTask(pacingAction, busyProjectPaths, config) {
+  if (!config) config = store.load();
   let pending = config.queue.filter(t => t.status === 'pending');
 
   // Skip tasks whose project has an active Claude session
@@ -385,7 +389,7 @@ async function tick() {
   }
 
   const config = store.load();
-  const outsideHours = isOutsideWorkHours();
+  const outsideHours = isOutsideWorkHours(config);
   const idle = config.idleEnabled && tokenMonitor.isUserIdle(config.idleMinutes || 15);
   const busyPaths = await getBusyProjectPaths();
   const busy = busyPaths.size > 0;
@@ -409,7 +413,7 @@ async function tick() {
 
   // Fallback for when pacing is disabled: use old threshold
   const oldCapacity = !pacing && config.capacityEnabled &&
-    tokenMonitor.hasSpareCapacity(config.capacityThreshold || 50);
+    tokenMonitor.hasSpareCapacity();
 
   const pacingAction = pacing ? pacing.action : 'wait';
 
@@ -448,7 +452,6 @@ async function tick() {
     return;
   }
 
-
   // Run skill analysis on one project per tick (non-blocking, only pace/coast uses Claude)
   if (pacingAction !== 'burst') {
     await maybeRunSkillAnalysis(pacingAction);
@@ -459,7 +462,7 @@ async function tick() {
   const MAX_PARALLEL = isBurst ? 3 : 2;
 
   // Pre-fill queue if running low on pending tasks
-  const pendingCount = store.getQueue().filter(t => t.status === 'pending').length;
+  const pendingCount = config.queue.filter(t => t.status === 'pending').length;
   if (pendingCount < 5) {
     const n = autoEnqueue(isBurst);
     if (n > 0) notifyStatus('enqueued', `Auto-encoladas ${n} tareas`);
@@ -469,11 +472,13 @@ async function tick() {
   const tasks = [];
   const excludePaths = new Set(busyPaths); // grows as we pick tasks
   for (let i = 0; i < MAX_PARALLEL; i++) {
-    let task = selectTask(pacingAction, excludePaths);
+    let task = selectTask(pacingAction, excludePaths, config);
     if (!task && i === 0) {
       const n = autoEnqueue(isBurst);
       if (n > 0) {
-        task = selectTask(pacingAction, excludePaths);
+        // Re-load config after autoEnqueue modified it
+        const updated = store.load();
+        task = selectTask(pacingAction, excludePaths, updated);
         notifyStatus('enqueued', `Auto-encoladas ${n} tareas`);
       }
     }
@@ -534,7 +539,8 @@ async function tick() {
       if (result.status === 'done') {
         try {
           const updated = await analyzer.analyze({ name: task.project, path: task.projectPath });
-          store.setProject(task.project, { ...store.load().projects[task.project], ...updated, lastAnalysis: new Date().toISOString() });
+          const current = store.load();
+          store.setProject(task.project, { ...current.projects[task.project], ...updated, lastAnalysis: new Date().toISOString() });
         } catch {}
       }
 
@@ -586,7 +592,7 @@ function start(opts = {}) {
   // First tick after 5s delay (let app initialize), then dynamic scheduling
   timer = setTimeout(async () => {
     // Pre-populate queue if empty so first tick has work to do
-    const pending = store.getQueue().filter(t => t.status === 'pending');
+    const pending = store.load().queue.filter(t => t.status === 'pending');
     if (pending.length === 0) autoEnqueue();
 
     await tick();
@@ -625,7 +631,7 @@ function getStatus() {
     pacingEnabled: config.pacingEnabled !== false,
     capacityEnabled: config.capacityEnabled !== false,
     capacityThreshold: config.capacityThreshold || 50,
-    outsideWorkHours: isOutsideWorkHours(),
+    outsideWorkHours: isOutsideWorkHours(config),
     idleEnabled: config.idleEnabled !== false,
     idleMinutes: config.idleMinutes || 15,
     userIdleFor: Math.round(idleMin),
@@ -635,11 +641,10 @@ function getStatus() {
     dailyBudget: config.dailyBudgetUsd,
     workHours: config.workHours,
     pendingTasks: config.queue.filter(t => t.status === 'pending').length,
-    runningTask: running ? (executor.execute._currentTask || null) : null,
+    runningTask: null,
     tickInterval: currentInterval,
-    lastTickDebug,
-    lastMessage: null
+    lastTickDebug
   };
 }
 
-module.exports = { start, stop, pause, resume, getStatus, autoEnqueue, getProjectPriority, getRecommendedSkill };
+module.exports = { start, stop, pause, resume, getStatus, autoEnqueue, getProjectPriority, getSkillsForProject, getRecommendedSkill };
