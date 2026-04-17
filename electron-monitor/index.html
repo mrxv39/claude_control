@@ -16,16 +16,16 @@
 </div>
 <div class="panel" id="panel">
   <div class="panel-header">
-    <div class="panel-tabs">
-      <button class="panel-tab active" data-tab="health">Salud</button>
-      <button class="panel-tab" data-tab="queue">Cola</button>
-      <button class="panel-tab" data-tab="log">Log</button>
-      <button class="panel-tab" data-tab="stats">Stats</button>
+    <div class="panel-tabs" role="tablist">
+      <button class="panel-tab active" data-tab="health" role="tab" aria-selected="true">Salud</button>
+      <button class="panel-tab" data-tab="queue" role="tab" aria-selected="false">Cola</button>
+      <button class="panel-tab" data-tab="log" role="tab" aria-selected="false">Log</button>
+      <button class="panel-tab" data-tab="stats" role="tab" aria-selected="false">Stats</button>
     </div>
     <span class="panel-budget" id="budget-display"></span>
     <button class="panel-close" id="panel-close-btn" aria-label="Cerrar panel">Cerrar</button>
   </div>
-  <div class="panel-content" id="panel-content"></div>
+  <div class="panel-content" id="panel-content" role="tabpanel"></div>
 </div>
 <script>
 const { ipcRenderer } = require('electron');
@@ -90,6 +90,8 @@ function render(sessions) {
     if (s.status==='BUSY') b++; else if (s.status==='WAITING') w++; else i++;
     const d = document.createElement('div');
     d.className = 'chip ' + s.status.toLowerCase();
+    d.setAttribute('tabindex', '0');
+    d.setAttribute('role', 'button');
     if (s.hwnd && selected.has(s.hwnd)) d.classList.add('selected');
     const ctx = s.contextPercent || 0;
     d.title = `${s.project}\n${s.cwd || ''}\nEstado: ${s.status}\nContexto: ${ctx}%\nPID: ${s.pid}`;
@@ -155,6 +157,12 @@ function render(sessions) {
       selected.clear();
       ipcRenderer.invoke('focus-wt', { hwnd: s.hwnd, tabIndex: s.tabIndex });
       refresh();
+    });
+    d.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        d.click();
+      }
     });
     chips.appendChild(d);
   });
@@ -276,8 +284,9 @@ minBtn.addEventListener('click', async () => {
 
 document.querySelectorAll('.panel-tab').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.panel-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel-tab').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
     btn.classList.add('active');
+    btn.setAttribute('aria-selected', 'true');
     currentTab = btn.dataset.tab;
     loadTab(currentTab);
   });

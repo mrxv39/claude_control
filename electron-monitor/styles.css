@@ -41,6 +41,7 @@ body { font-family:'Segoe UI',sans-serif; background:var(--bg); overflow:hidden;
 }
 .chip:hover { transform:translateY(-1px); }
 .chip:active { transform:translateY(0); }
+.chip:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 .chip.selected { outline:2px solid var(--accent); outline-offset:1px; }
 
 /* Status colors — the left accent border IS the status indicator now */
@@ -88,6 +89,7 @@ body { font-family:'Segoe UI',sans-serif; background:var(--bg); overflow:hidden;
 
 /* ── Bar buttons ── */
 .bar-btn { background:none; border:none; color:var(--text-dim); font-size:14px; cursor:pointer; padding:4px 6px; border-radius:4px; -webkit-app-region:no-drag; transition:all .1s; line-height:1; }
+.bar-btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .close:hover { background:rgba(247,118,142,.15); color:var(--red); }
 .minimize-all:hover { background:rgba(224,175,104,.15); color:var(--yellow); }
 .gear:hover { background:rgba(122,162,247,.15); color:var(--accent); }
