@@ -40,15 +40,26 @@ function getLastUserActivity() {
     const projectDirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
       .filter(d => d.isDirectory());
 
+    // Sort by directory mtime (most recent first) and limit to top 15
+    // to avoid scanning all 68+ project dirs every 30s
+    const cutoff = now - 60 * 60 * 1000;
+    const dirsWithMtime = [];
     for (const dir of projectDirs) {
       const dirPath = path.join(PROJECTS_DIR, dir.name);
+      try {
+        const stat = fs.statSync(dirPath);
+        if (stat.mtimeMs >= cutoff) dirsWithMtime.push({ dirPath, mtimeMs: stat.mtimeMs });
+      } catch { continue; }
+    }
+    dirsWithMtime.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const topDirs = dirsWithMtime.slice(0, 15);
+
+    for (const { dirPath } of topDirs) {
       let jsonlFiles;
       try {
         jsonlFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
       } catch { continue; }
 
-      // Only check files modified in the last hour (skip stale sessions)
-      const cutoff = now - 60 * 60 * 1000;
       for (const file of jsonlFiles) {
         const filePath = path.join(dirPath, file);
         try {
