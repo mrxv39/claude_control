@@ -10,6 +10,7 @@
   <div class="chips" id="chips"></div>
   <span class="stats" id="stats"></span>
   <span id="idle-indicator" style="display:none;font-size:10px;color:#bb9af7;background:rgba(187,154,247,.15);padding:2px 6px;border-radius:3px;flex-shrink:0;-webkit-app-region:no-drag;" title="Ejecutando tareas automáticas"></span>
+  <span id="avg-indicator" style="display:none;font-size:10px;padding:2px 6px;border-radius:3px;flex-shrink:0;-webkit-app-region:no-drag;cursor:pointer;" title="Media de uso de tokens (7d) — click para ver detalle">AVG ?%</span>
   <button class="bar-btn minimize-all" id="minimize-all-btn" title="Minimizar todas las consolas" aria-label="Minimizar todas las consolas">&#9644;</button>
   <button class="bar-btn gear" id="gear-btn" title="Panel del orquestador" aria-label="Abrir panel del orquestador">&#9881;</button>
   <button class="bar-btn close" id="close-btn" aria-label="Ocultar barra">✕</button>
@@ -219,12 +220,36 @@ async function refresh() {
       ind.style.display = 'none';
     }
   } catch {}
+  // AVG % token usage (7d rolling, updated on each refresh — cheap read)
+  try {
+    const avg = await ipcRenderer.invoke('auto:token-avg', 7);
+    const el = document.getElementById('avg-indicator');
+    if (!el) return;
+    if (!avg || avg.status === 'no-data' || avg.count === 0) {
+      el.style.display = 'none';
+      return;
+    }
+    const pct = avg.avg;
+    const color = pct >= 90 ? '#9ece6a' : pct >= 70 ? '#e0af68' : '#f7768e';
+    el.textContent = `AVG ${pct}%`;
+    el.style.color = color;
+    el.style.background = color + '22';
+    el.style.display = '';
+  } catch {}
 }
 // Bar-only: poll sessions every 3s. Panel window doesn't need chips.
 if (!isPanel) {
   refresh();
   setInterval(refresh, 3000);
 }
+
+// AVG indicator click → open panel on Tokens tab (wired when that tab exists;
+// for now just opens the panel).
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'avg-indicator') {
+    ipcRenderer.invoke('toggle-panel');
+  }
+});
 
 // Show update chip if available
 ipcRenderer.on('update-available', (ev, version, url) => {
