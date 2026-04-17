@@ -22,11 +22,14 @@
 | `lib/git-status.js` | ~50 | Branch + dirty count per CWD |
 | `lib/conversation-reader.js` | ~180 | Read Claude JSONL for log display |
 | `lib/statusline-writer.js` | ~80 | Write rate-limits.json for statusLine |
+| `lib/license.js` | ~180 | First-run gate: machineId, register/validate, cache |
+| `lib/telemetry.js` | ~220 | Event batching, heartbeat, offline queue JSONL |
+| `activation.html` | ~200 | First-run modal: machineId + email + activate |
 
 ## Tests
 
 - Framework: **vitest** (`npm test` = `vitest run`)
-- 261 tests en 16 archivos: orchestrator-store (14), scheduler (22), skill-analyzer (16), token-monitor (17), utils (8), token-history (16), stats-aggregator (8), conversation-reader (22), project-analyzer (11), appbar (15), notifications (14), overlay-manager (15), executor (27), git-status (18), project-scanner (20), statusline-writer (18)
+- 310 tests en 18 archivos: orchestrator-store (14), scheduler (22), skill-analyzer (16), token-monitor (17), utils (8), token-history (16), stats-aggregator (8), conversation-reader (22), project-analyzer (11), appbar (15), notifications (14), overlay-manager (15), executor (27), git-status (18), project-scanner (20), statusline-writer (18), license (22), telemetry (27)
 - Solo módulos de lógica pura (sin FFI/Electron)
 
 ## IPC Channels (main ↔ renderer)
@@ -159,8 +162,36 @@ Arranca centrada horizontalmente. Si el usuario la arrastra, recuerda la posici�
 - `npm run build` genera `dist/ClaudioControl.exe` (portable, ~80MB).
 - Usa `electron-builder` con target `portable` y sin code signing.
 - Los `.ps1` se incluyen como `extraResources` → quedan en `resources/` del empaquetado.
+- `activation.html` se empaqueta en `build.files` junto a `index.html`.
 - `resolveScript(name)` busca scripts en `__dirname` (dev) o `process.resourcesPath` (empaquetado).
 - Release en GitHub: `gh release create vX.X.X dist/ClaudioControl.exe`.
+
+## License gate + telemetría
+
+Al arrancar, `app.whenReady` llama a `license.checkLicenseGate()` ANTES de crear la barra:
+
+- **Machine ID**: se lee de `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` (fallback SHA256(hostname+username)).
+- **license.json** en `~/.claude/claudio-state/license.json` cachea `{machineId, email, name, status, plan, registeredAt, lastValidatedAt}`.
+- **Flujo**:
+  - Primera ejecución (sin `license.json`) o copia-pega (machineId no coincide) → abre `activation.html` (modal 500×560).
+  - Usuario introduce email (obligatorio) + nombre (opcional) → handler `activate` hace POST a `cc-register` en Supabase → si backend responde `status:'active'` escribe `license.json` y arranca la barra. Si backend inalcanzable, activación local offline como fallback (se re-registra en próxima validación online).
+  - Si `status='revoked'` en cache o en respuesta online → `dialog.showErrorBox` + `app.quit`.
+  - Re-validación cada 6h (`setInterval` paralelo a `checkForUpdates`). Si entre tanto pasa a `revoked`, cierra la app con mensaje.
+  - Offline grace period: 7 días con cache vieja. Más allá → pide reconexión.
+
+**Backend (Supabase `hyydkyhvgcekvtkrnspf`)**:
+- Tablas: `cc_installations`, `cc_sessions`, `cc_events` (prefijo `cc_` para aislamiento en proyecto compartido).
+- Edge functions: `cc-register`, `cc-validate`, `cc-heartbeat`, `cc-events`.
+- Revocar un usuario: `UPDATE cc_installations SET status='revoked', revoked_reason='…' WHERE machine_id='…'` en Supabase Studio.
+- **Lightning ready**: campos `lightning_address` y `subscription_expires` reservados en `cc_installations` para cobro futuro vía BOLT11 (fuera de scope v1).
+
+**Telemetría** (`lib/telemetry.js`):
+- `startSession(machineId, version)` al arrancar → UUID sessionId + heartbeat loop (60s) + flush loop (30s).
+- `trackEvent(type, payload)` valida `type` contra whitelist y dropea desconocidos. `scrubPayload` quita campos sensibles (cwd, path, branch, prompt, content, output, token, apiKey) y anonimiza paths en stacks.
+- Queue offline en `telemetry-queue.jsonl` (cap 1000 líneas, FIFO). Se drena al próximo flush con éxito.
+- `endSession()` en `before-quit` hace flush final + heartbeat final.
+- **Eventos whitelisted**: `app_start`, `app_stop`, `panel_toggle`, `panel_tab_view`, `skill_run`, `skill_enqueue`, `scheduler_pause`, `scheduler_resume`, `session_focus`, `session_idle`, `update_available`, `update_applied`, `error`.
+- **Puntos de instrumentación**: `main.js` (app_start/stop, scheduler pause/resume, update_available, skill_enqueue manual), `executor.js:370` (skill_run), `notifications.js:88` (session_idle), `index.html` (panel_toggle, panel_tab_view, session_focus).
 
 ## Smart Pacing (scheduler.js + token-monitor.js)
 

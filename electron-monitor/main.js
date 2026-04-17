@@ -1,5 +1,6 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, Notification, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, Notification, dialog, shell } = require('electron');
 const { execSync, execFile } = require('child_process');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const store = require('./lib/orchestrator-store');
@@ -14,6 +15,8 @@ const statsAggregator = require('./lib/stats-aggregator');
 const win32 = require('./lib/win32');
 const overlayManager = require('./lib/overlay-manager');
 const notifications = require('./lib/notifications');
+const license = require('./lib/license');
+const telemetry = require('./lib/telemetry');
 
 const {
   FindWindowA, ShowWindow, IsIconic, IsWindow, MoveWindow,
@@ -26,8 +29,7 @@ const SW_RESTORE = 9;
 
 let mainWindow;
 let tray = null;
-let userPosition = null;   // { x, y } — set when user drags the bar
-let isSettingBounds = false; // suppress 'move' during programmatic setBounds
+let firstShowDone = false;   // bar created with show:false until first resize-bar
 
 // Git cache for overlay titles (branch + dirty per cwd, 30s TTL)
 const mainGitCache = {};     // cwd -> { branch, dirty }
@@ -49,6 +51,10 @@ function createWindow() {
     frame: false, transparent: false,
     alwaysOnTop: true, skipTaskbar: false, resizable: false,
     backgroundColor: '#181825',
+    icon: path.join(__dirname, 'icon.ico'),
+    // Hidden on creation; we show after the first resize-bar so the bar
+    // doesn't visibly jump from initial 300px width to the real chip width.
+    show: false,
     // Security note: contextIsolation:false is intentional — this is a local-only app
     // that never loads remote content. nodeIntegration is needed for IPC in the renderer.
     webPreferences: { nodeIntegration: true, contextIsolation: false }
@@ -58,15 +64,6 @@ function createWindow() {
 
   mainWindow.on('close', (e) => {
     if (!isQuitting) { e.preventDefault(); mainWindow.hide(); }
-  });
-
-  // Only save user position on real drag (not programmatic moves at startup)
-  let moveReady = false;
-  setTimeout(() => { moveReady = true; }, 3000);
-  mainWindow.on('move', () => {
-    if (isSettingBounds || !moveReady) return;
-    const [x] = mainWindow.getPosition();
-    userPosition = { x };
   });
 }
 
@@ -95,7 +92,9 @@ function createTray() {
   const menu = Menu.buildFromTemplate([
     { label: 'Mostrar', click: () => {
       mainWindow.show(); mainWindow.setAlwaysOnTop(true, 'screen-saver');
-      if (!panelOpen) appBarRegister();
+      // Do NOT re-register AppBar here — re-registering on a visible bar
+      // makes Windows reposition it from Y=0 into the workArea (Y=48). The
+      // registration done at startup stays active across hide/show.
     } },
     { type: 'separator' },
     { label: 'Salir', click: () => { isQuitting = true; app.quit(); } }
@@ -146,7 +145,10 @@ function tileHwnds(hwnds, { singleFull = false } = {}) {
 // ---- IPC: bar management ----
 ipcMain.handle('hide-bar', () => {
   if (!mainWindow) return;
-  appBarUnregister();
+  // Keep AppBar reserved during hide. Unregistering + re-registering causes
+  // Windows to relocate the bar to Y=BAR_H on the next show. The downside
+  // (48px reserved strip while bar is invisible) is acceptable — apps still
+  // respect the area, and on Mostrar the bar reappears exactly where it was.
   mainWindow.hide();
 });
 
@@ -171,14 +173,21 @@ ipcMain.handle('resize-bar', (event, w) => {
   const width = Math.max(180, Math.min(Math.ceil(n), bounds.width));
   const [, h] = mainWindow.getSize();
 
-  // Bar always stays at top of screen (y=0), only x changes
-  const x = userPosition
-    ? Math.max(bounds.x, Math.min(userPosition.x, bounds.x + bounds.width - width))
-    : Math.round((bounds.width - width) / 2) + bounds.x;
+  // Always center horizontally. We deliberately don't track user drags —
+  // Windows DWM fires async 'move' events after AppBar/show operations that
+  // are indistinguishable from real drags, polluting any position cache and
+  // preventing the bar from re-centering when its width changes.
+  const x = Math.round((bounds.width - width) / 2) + bounds.x;
 
-  isSettingBounds = true;
   mainWindow.setBounds({ x, y: bounds.y, width, height: h });
-  isSettingBounds = false;
+  // First resize after startup: window was created with show:false to avoid
+  // a visible jump from initial 300px to the real chip width. Show it now
+  // that it's at the correct position. After this, hide-bar / Mostrar
+  // control visibility — don't auto-show on subsequent resizes.
+  if (!firstShowDone) {
+    firstShowDone = true;
+    mainWindow.show();
+  }
 });
 
 // ---- IPC: window focus ----
@@ -378,6 +387,7 @@ async function checkForUpdates() {
     if (latest && latest !== PKG_VERSION) {
       const url = data.html_url || 'https://github.com/mrxv39/claude_control/releases/latest';
       mainWindow.webContents.send('update-available', latest, url);
+      telemetry.trackEvent('update_available', { from: PKG_VERSION, to: latest });
     }
   } catch {}
 }
@@ -428,43 +438,47 @@ ipcMain.handle('run-setup-hook', async () => {
 
 // ---- Orchestrator IPC handlers ----
 let panelOpen = false;
+let panelWindow = null;
 const BAR_H = 48;
 
-let barBoundsBeforePanel = null;
-
 ipcMain.handle('toggle-panel', () => {
-  if (!mainWindow) return;
-  panelOpen = !panelOpen;
+  // Close existing panel window
+  if (panelWindow && !panelWindow.isDestroyed()) {
+    panelWindow.close();
+    return false;
+  }
+
+  // Open panel as a SEPARATE window so the bar stays at its original
+  // position/size. Loads index.html with hash '#panel' — the renderer hides
+  // the bar and shows the panel full-window when it detects that hash.
   const { screen } = require('electron');
   const wa = screen.getPrimaryDisplay().workArea;
+  const panelW = Math.min(Math.max(900, Math.round(wa.width * 0.7)), wa.width);
+  const panelH = Math.round(wa.height * 0.85);
+  const panelX = wa.x + Math.round((wa.width - panelW) / 2);
+  const panelY = wa.y;
 
-  if (panelOpen) {
-    appBarUnregister();
+  panelWindow = new BrowserWindow({
+    width: panelW, height: panelH, x: panelX, y: panelY,
+    frame: false, transparent: false,
+    skipTaskbar: false, resizable: true,
+    backgroundColor: '#181825',
+    parent: mainWindow,
+    show: false,
+    webPreferences: { nodeIntegration: true, contextIsolation: false }
+  });
+  panelWindow.loadFile('index.html', { hash: 'panel' });
+  panelWindow.once('ready-to-show', () => panelWindow.show());
+  panelWindow.on('closed', () => {
+    panelWindow = null;
+    panelOpen = false;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('panel-closed');
+    }
+  });
 
-    const [bx, by] = mainWindow.getPosition();
-    const [bw] = mainWindow.getSize();
-    barBoundsBeforePanel = { x: bx, y: by, width: bw };
-
-    const panelW = Math.min(Math.max(900, Math.round(wa.width * 0.7)), wa.width);
-    const panelH = Math.min(Math.round(wa.height * 0.75), wa.height);
-    const panelX = wa.x + Math.round((wa.width - panelW) / 2);
-    const panelY = wa.y + Math.round((wa.height - panelH) / 2);
-    mainWindow.setAlwaysOnTop(false);
-    mainWindow.setResizable(true);
-    mainWindow.setBounds({ x: panelX, y: panelY, width: panelW, height: panelH });
-    mainWindow.setResizable(false);
-    mainWindow.focus();
-  } else {
-    const bounds = screen.getPrimaryDisplay().bounds;
-    const b = barBoundsBeforePanel || { x: bounds.x, y: bounds.y, width: 600 };
-    mainWindow.setResizable(true);
-    mainWindow.setBounds({ x: b.x, y: b.y, width: b.width, height: BAR_H });
-    mainWindow.setResizable(false);
-    mainWindow.setAlwaysOnTop(true, 'screen-saver');
-    barBoundsBeforePanel = null;
-    appBarRegister();
-  }
-  return panelOpen;
+  panelOpen = true;
+  return true;
 });
 
 ipcMain.handle('get-orchestrator-config', () => store.load());
@@ -498,8 +512,8 @@ ipcMain.handle('get-budget-status', () => {
 });
 
 ipcMain.handle('get-scheduler-status', () => scheduler.getStatus());
-ipcMain.handle('pause-scheduler', () => { scheduler.pause(); return true; });
-ipcMain.handle('resume-scheduler', () => { scheduler.resume(); return true; });
+ipcMain.handle('pause-scheduler', () => { scheduler.pause(); telemetry.trackEvent('scheduler_pause', {}); return true; });
+ipcMain.handle('resume-scheduler', () => { scheduler.resume(); telemetry.trackEvent('scheduler_resume', {}); return true; });
 ipcMain.handle('emergency-stop', () => { scheduler.pause(); return true; });
 
 ipcMain.handle('get-token-history', () => tokenHistory.readHistory(50));
@@ -549,6 +563,62 @@ ipcMain.handle('get-session-log', (ev, cwd) => {
   catch { return []; }
 });
 
+// ---- License activation IPC ----
+ipcMain.handle('get-machine-id', async () => {
+  try { return await license.getMachineId(); }
+  catch { return ''; }
+});
+
+ipcMain.handle('activate', async (_ev, { email, name }) => {
+  try {
+    if (!email || typeof email !== 'string') return { ok: false, error: 'Email requerido' };
+    const machineId = await license.getMachineId();
+    const info = {
+      machineId,
+      email: email.trim(),
+      name: (name || '').trim() || null,
+      hostname: os.hostname(),
+      username: os.userInfo().username,
+      appVersion: PKG_VERSION
+    };
+    const res = await license.register(info);
+    if (!res) {
+      // v1: fall back to local-only activation so users can still run offline
+      // during early beta. Backend picks them up on next online validation.
+      license.saveLocalLicense({
+        machineId, email: info.email, name: info.name,
+        status: 'active', plan: 'beta',
+        registeredAt: new Date().toISOString(),
+        lastValidatedAt: new Date().toISOString(),
+        appVersion: PKG_VERSION,
+        offlineActivation: true
+      });
+      ipcMain.emit('activation-result', null, true);
+      return { ok: true, offline: true };
+    }
+    if (res.status === 'active' || res.status === 'trial' || !res.status) {
+      license.saveLocalLicense({
+        machineId, email: info.email, name: info.name,
+        status: 'active',
+        plan: res.plan || 'beta',
+        registeredAt: new Date().toISOString(),
+        lastValidatedAt: new Date().toISOString(),
+        appVersion: PKG_VERSION
+      });
+      ipcMain.emit('activation-result', null, true);
+      return { ok: true };
+    }
+    return { ok: false, error: res.message || 'Registro rechazado' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('track', (_ev, type, payload) => {
+  try { telemetry.trackEvent(type, payload || {}); }
+  catch {}
+});
+
 // ---- App lifecycle ----
 app.setAppUserModelId('com.claudio.monitor');
 
@@ -564,19 +634,74 @@ app.on('second-instance', () => {
   }
 });
 
-app.whenReady().then(() => {
+// Shown once on first run (or when cache is invalid). Modal BrowserWindow that
+// posts credentials back via the 'activate' IPC handler, then self-closes.
+function showActivationWindow() {
+  return new Promise(resolve => {
+    const w = new BrowserWindow({
+      width: 500, height: 560,
+      frame: false, resizable: false,
+      backgroundColor: '#181825',
+      show: false,
+      webPreferences: { nodeIntegration: true, contextIsolation: false }
+    });
+    let activated = false;
+    w.on('close', () => resolve({ ok: activated }));
+    ipcMain.once('activation-result', (_e, ok) => { activated = !!ok; });
+    w.loadFile('activation.html');
+    w.once('ready-to-show', () => { w.center(); w.show(); });
+  });
+}
+
+app.whenReady().then(async () => {
+  // ---- License gate (runs before any UI) ----
+  const gate = await license.checkLicenseGate();
+
+  if (gate.revoked) {
+    dialog.showErrorBox('Acceso revocado',
+      `Tu acceso a Claudio Control ha sido revocado.\n\nMotivo: ${gate.reason || 'sin detalles'}\n\nContacta: xavieeee@gmail.com`);
+    app.quit();
+    return;
+  }
+
+  if (gate.needsActivation || gate.needsReconnect) {
+    const title = gate.needsReconnect ? 'Reconexión necesaria' : 'Activar Claudio Control';
+    const result = await showActivationWindow();
+    if (!result.ok) { app.quit(); return; }
+    // Re-read the just-written license
+    const fresh = license.getLocalLicense();
+    if (!fresh) { app.quit(); return; }
+    gate.machineId = fresh.machineId;
+  }
+
+  // ---- Normal startup ----
   createWindow();
   createTray();
   overlayManager.startLoop();
   overlayManager.onSkillClick((project, skill, projectPath) => {
     store.enqueue({ project, skill, projectPath });
+    telemetry.trackEvent('skill_enqueue', { skill, source: 'manual' });
   });
   appBarRegister();
+
+  telemetry.startSession(gate.machineId, PKG_VERSION);
+  telemetry.trackEvent('app_start', { version: PKG_VERSION });
+
   mainWindow.webContents.on('did-finish-load', () => {
     checkHookSetup();
     setupStatusLine();
     checkForUpdates();
     setInterval(checkForUpdates, 6 * 60 * 60 * 1000);
+    // Periodic license re-validation (revoke detection).
+    setInterval(async () => {
+      const res = await license.validate(gate.machineId, PKG_VERSION);
+      if (res && res.status === 'revoked') {
+        dialog.showErrorBox('Acceso revocado',
+          `Tu acceso a Claudio Control ha sido revocado.\n\nMotivo: ${res.revokedReason || 'sin detalles'}\n\nContacta: xavieeee@gmail.com`);
+        isQuitting = true;
+        app.quit();
+      }
+    }, 6 * 60 * 60 * 1000);
     // Auto-scan projects if last scan > 24h ago
     const config = store.load();
     const lastScan = config.lastFullScan ? new Date(config.lastFullScan).getTime() : 0;
@@ -603,8 +728,10 @@ app.whenReady().then(() => {
   });
 });
 app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
   isQuitting = true;
+  try { telemetry.trackEvent('app_stop', {}); } catch {}
+  try { await telemetry.endSession(); } catch {}
   appBarUnregister();
   overlayManager.setQuitting(true);
   scheduler.stop();

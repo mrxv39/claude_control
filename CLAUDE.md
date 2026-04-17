@@ -4,26 +4,10 @@ Monitor visual + orquestador autónomo de sesiones Claude Code en Windows Termin
 
 ## Componentes
 
-- **`electron-monitor/`** — app Electron principal (barra + overlays + tile + tray + notificaciones + auto-update)
-- **`electron-monitor/lib/`** — módulos:
-  - `win32.js` — koffi FFI bindings (user32.dll), enumWtWindows, focusWindow
-  - `overlay-manager.js` — overlay BrowserWindows sobre cada WT (loop 60ms)
-  - `notifications.js` — toast + chime audio + status change tracking
-  - `orchestrator-store.js` — persistencia en `~/.claude/claudio-state/orchestrator.json`
-  - `project-scanner.js` — descubrimiento de proyectos en directorios configurados
-  - `project-analyzer.js` — health checks locales (CLAUDE.md, tests, git, deps)
-  - `executor.js` — ejecuta `claude --print` en ramas auto-creadas
-  - `scheduler.js` — planificador autónomo fuera de horario laboral
-  - `skill-analyzer.js` — heurístico + Claude analysis de skills por proyecto
-  - `git-status.js` — rama y dirty count por proyecto
-  - `conversation-reader.js` — lee JSONL de sesiones para log display
-  - `token-monitor.js` — rate limits, pacing decisions, idle detection
-  - `token-history.js` — captura uso de tokens al final de cada ciclo 5h en JSONL
-  - `stats-aggregator.js` — agregación de datos para el tab Stats del panel
-  - `statusline-writer.js` — escribe rate-limits.json para statusLine hook
-  - `utils.js` — utilidades compartidas (escapeHtml)
-- **`SessionMonitor/`**, **`ClaudeSession/`** — módulos PowerShell antiguos (versión previa)
-- **`instrucciones.html`** — manual de usuario HTML standalone
+- **`electron-monitor/`** — app Electron principal (barra + overlays + tile + tray + notificaciones + auto-update + license gate). Módulos `lib/` documentados en `electron-monitor/CLAUDE.md`.
+- **`supabase/functions/`** — edge functions para licencias/telemetría (`cc-register`, `cc-validate`, `cc-heartbeat`, `cc-events`) desplegadas en proyecto Supabase compartido.
+- **`SessionMonitor/`**, **`ClaudeSession/`** — módulos PowerShell antiguos (versión previa).
+- **`instrucciones.html`** — manual de usuario HTML standalone.
 
 Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 
@@ -64,7 +48,7 @@ Arquitectura detallada en los CLAUDE.md de cada subcarpeta.
 - **Timeouts**: idle timeout 120s (sin output = hung), watchdog 8 min, retry automático 1 vez en timeout.
 - **Seguridad**: nunca toca master, nunca push. Sin budget artificial (Max plan).
 - **statusLine hook**: `~/.claude/settings.json` → escribe `rate-limits.json` con rate limits, contexto, coste.
-- **Git badges**: rama + dirty count + contexto % en cada chip de sesión.
+- **Git badges**: rama + dirty count + contexto % en el overlay de título de cada ventana WT (no en los chips).
 
 ## Pendientes / cosas frágiles
 

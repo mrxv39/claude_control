@@ -29,6 +29,11 @@
 </div>
 <script>
 const { ipcRenderer } = require('electron');
+// Same index.html serves two windows: the always-on-top bar (default) and the
+// orchestrator panel (loaded with hash '#panel'). The flag below gates the
+// init paths so each window only runs the JS it needs.
+const isPanel = window.location.hash === '#panel';
+if (isPanel) document.body.classList.add('panel-mode');
 const chips = document.getElementById('chips');
 const stats = document.getElementById('stats');
 
@@ -119,6 +124,7 @@ function render(sessions) {
           ev.stopPropagation();
           selected.clear();
           ipcRenderer.invoke('focus-wt', { hwnd: sv.hwnd, tabIndex: sv.tabIndex });
+          try { ipcRenderer.invoke('track', 'session_focus', {}); } catch {}
           refresh();
         });
         svcDiv.appendChild(badge);
@@ -139,6 +145,7 @@ function render(sessions) {
       }
       selected.clear();
       ipcRenderer.invoke('focus-wt', { hwnd: s.hwnd, tabIndex: s.tabIndex });
+      try { ipcRenderer.invoke('track', 'session_focus', {}); } catch {}
       refresh();
     });
     d.addEventListener('keydown', (ev) => {
@@ -213,8 +220,11 @@ async function refresh() {
     }
   } catch {}
 }
-refresh();
-setInterval(refresh, 3000);
+// Bar-only: poll sessions every 3s. Panel window doesn't need chips.
+if (!isPanel) {
+  refresh();
+  setInterval(refresh, 3000);
+}
 
 // Show update chip if available
 ipcRenderer.on('update-available', (ev, version, url) => {
@@ -244,17 +254,32 @@ const budgetDisplay = document.getElementById('budget-display');
 let currentTab = 'health';
 
 async function togglePanel() {
+  if (isPanel) {
+    // We're in the panel window — closing the IPC destroys this window.
+    await ipcRenderer.invoke('toggle-panel');
+    return;
+  }
   const isOpen = await ipcRenderer.invoke('toggle-panel');
-  panel.classList.toggle('open', isOpen);
   gearBtn.classList.toggle('active', isOpen);
-  if (isOpen) loadTab(currentTab);
+  try { ipcRenderer.invoke('track', 'panel_toggle', { open: !!isOpen }); } catch {}
 }
-gearBtn.addEventListener('click', togglePanel);
+if (gearBtn) gearBtn.addEventListener('click', togglePanel);
 document.getElementById('panel-close-btn').addEventListener('click', togglePanel);
-document.getElementById('close-btn').addEventListener('click', () => {
-  if (panel.classList.contains('open')) togglePanel();
-  else ipcRenderer.invoke('hide-bar');
+if (!isPanel) {
+  document.getElementById('close-btn').addEventListener('click', () => {
+    ipcRenderer.invoke('hide-bar');
+  });
+}
+// Bar window: keep the gear's "active" state in sync when the panel window
+// is closed externally (taskbar, Alt+F4, etc.).
+ipcRenderer.on('panel-closed', () => {
+  if (gearBtn) gearBtn.classList.remove('active');
 });
+// Panel window: load the initial tab content as soon as the DOM is ready.
+if (isPanel) {
+  // Mark gear as null-safe in panel mode (no gear button rendered).
+  loadTab('health');
+}
 const minBtn = document.getElementById('minimize-all-btn');
 let minimizedHwnds = [];
 minBtn.addEventListener('click', async () => {
@@ -279,6 +304,7 @@ document.querySelectorAll('.panel-tab').forEach(btn => {
     btn.setAttribute('aria-selected', 'true');
     currentTab = btn.dataset.tab;
     loadTab(currentTab);
+    try { ipcRenderer.invoke('track', 'panel_tab_view', { tab: currentTab }); } catch {}
   });
 });
 
@@ -853,10 +879,11 @@ async function renderStats() {
   panelContent.innerHTML = html;
 }
 
-// Live scheduler status updates
+// Live scheduler status updates — only relevant in the panel window.
 ipcRenderer.on('scheduler-status', (ev, status) => {
-  if (currentTab === 'queue' && panel.classList.contains('open')) renderQueue();
-  if (currentTab === 'stats' && panel.classList.contains('open')) renderStats();
+  if (!isPanel) return;
+  if (currentTab === 'queue') renderQueue();
+  if (currentTab === 'stats') renderStats();
 });
 
 // Show setup chip if hook is missing

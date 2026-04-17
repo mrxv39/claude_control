@@ -91,6 +91,10 @@ function checkStatusChanges(sessions, onFocus) {
         showToast(`${s.project} terminó — click para enfocar`, () => {
           if (onFocus) onFocus({ hwnd, tabIndex });
         });
+        try {
+          // telemetry is loaded lazily to avoid circular imports in tests
+          require('./telemetry').trackEvent('session_idle', {});
+        } catch {}
       }
     } else {
       waitingCount.set(s.cwd, 0);

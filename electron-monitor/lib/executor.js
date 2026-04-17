@@ -27,6 +27,7 @@ const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const store = require('./orchestrator-store');
+const telemetry = require('./telemetry');
 
 const RUNS_DIR = path.join(store.STATE_DIR, 'runs');
 
@@ -373,6 +374,16 @@ async function execute(task, onProgress) {
         skill: task.skill,
         taskId: task.id
       });
+
+      try {
+        telemetry.trackEvent('skill_run', {
+          skill: task.skill,
+          status: result.status,
+          durationSeconds: duration,
+          exitCode: code,
+          hasChanges: !!result.hasChanges
+        });
+      } catch {}
 
       resolve(result);
     });

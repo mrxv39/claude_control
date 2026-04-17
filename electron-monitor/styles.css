@@ -23,9 +23,9 @@ body { font-family:'Segoe UI',sans-serif; background:var(--bg); overflow:hidden;
 }
 
 /* ── Bar ── */
-.bar { display:flex; align-items:center; height:44px; padding:0 10px 0 14px; gap:6px; width:100%; }
+.bar { display:flex; align-items:center; height:44px; padding:0 10px 0 14px; gap:6px; width:fit-content; }
 .logo { font-size:13px; font-weight:600; color:var(--accent); margin-right:8px; flex-shrink:0; }
-.chips { display:flex; align-items:center; gap:5px; scrollbar-width:none; overflow-x:auto; overflow-y:hidden; flex:1; min-width:0; }
+.chips { display:flex; align-items:center; gap:5px; scrollbar-width:none; overflow-x:auto; overflow-y:hidden; flex:0 0 auto; min-width:0; }
 .chips::-webkit-scrollbar { display:none; }
 
 /* ── Chips — the core element users see all day ── */
@@ -98,6 +98,11 @@ body { font-family:'Segoe UI',sans-serif; background:var(--bg); overflow:hidden;
 /* ── Panel ── */
 .panel { display:none; background:var(--bg); overflow:hidden; -webkit-app-region:no-drag; height:calc(100vh - 48px); }
 .panel.open { display:flex; flex-direction:column; }
+
+/* Panel-mode: the same index.html is loaded in a separate window with hash
+   '#panel'. Hide the bar entirely and let the panel fill the window. */
+body.panel-mode .bar { display:none; }
+body.panel-mode .panel { display:flex; flex-direction:column; height:100vh; }
 
 /* Panel header — anchored navigation strip */
 .panel-header {
