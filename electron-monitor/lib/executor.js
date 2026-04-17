@@ -214,9 +214,9 @@ function getMainBranch(cwd) {
 /**
  * Check if current branch has changes vs the main branch.
  */
-function branchHasCommits(cwd) {
-  return new Promise(async resolve => {
-    const main = await getMainBranch(cwd);
+async function branchHasCommits(cwd) {
+  const main = await getMainBranch(cwd);
+  return new Promise(resolve => {
     execFile('git', ['diff', `${main}...HEAD`, '--stat'], { cwd, timeout: 5000 }, (err, stdout) => {
       resolve(!err && stdout && stdout.trim().length > 0);
     });

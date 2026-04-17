@@ -27,11 +27,10 @@ const escapeHtml = require('./utils').escapeHtml;
 function overlayHtml(label, status) {
   const safe = escapeHtml(label);
   const bg = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
-  const border = status === 'BUSY' ? 'rgba(158,206,106,1)' : 'rgba(247,118,142,1)';
   const textColor = status === 'BUSY' ? '#1a2e0a' : '#3a0a12';
   return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
 <!DOCTYPE html><html><body style="margin:0;padding:0;font-family:'Segoe UI',sans-serif;">
-<div style="background:${bg};border:1px solid ${border};border-top:none;color:${textColor};font-size:16px;font-weight:700;padding:5px 15px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe}</div>
+<div style="background:${bg};border:1px solid ${bg};border-top:none;color:${textColor};font-size:16px;font-weight:700;padding:5px 15px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe}</div>
 </body></html>`);
 }
 
