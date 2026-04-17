@@ -22,6 +22,7 @@
       <button class="panel-tab" data-tab="queue" role="tab" aria-selected="false">Cola</button>
       <button class="panel-tab" data-tab="log" role="tab" aria-selected="false">Log</button>
       <button class="panel-tab" data-tab="stats" role="tab" aria-selected="false">Stats</button>
+      <button class="panel-tab" data-tab="auto" role="tab" aria-selected="false">Autónomo</button>
     </div>
     <span class="panel-budget" id="budget-display"></span>
     <button class="panel-close" id="panel-close-btn" aria-label="Cerrar panel">Cerrar</button>
@@ -344,7 +345,211 @@ async function loadTab(tab) {
   else if (tab === 'queue') await renderQueue();
   else if (tab === 'log') await renderLog();
   else if (tab === 'stats') await renderStats();
+  else if (tab === 'auto') await renderAuto();
 }
+
+// ---- Tab Autónomo (sistema nuevo F1+) — DOM-API only, sin innerHTML ----
+
+const AUTO_TEMPLATES = [
+  { name: 'production-ready', label: 'Production-ready' },
+  { name: 'MVP-lanzable', label: 'MVP lanzable' },
+  { name: 'mantenimiento', label: 'Mantenimiento' },
+  { name: 'explorar-idea', label: 'Explorar idea' },
+  { name: 'seguro-y-testeado', label: 'Seguro y testeado' },
+];
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
+      else if (k === 'class') node.className = v;
+      else if (k === 'dataset' && typeof v === 'object') Object.assign(node.dataset, v);
+      else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
+      else if (k === 'text') node.textContent = v;
+      else if (v != null) node.setAttribute(k, v);
+    }
+  }
+  for (const c of children) {
+    if (c == null) continue;
+    if (typeof c === 'string') node.appendChild(document.createTextNode(c));
+    else node.appendChild(c);
+  }
+  return node;
+}
+
+function autoProjectRow(name, p, active) {
+  const tpl = p.objective?.template || '';
+  const score = p.analysis?.score ?? '?';
+
+  const row = el('div', {
+    class: 'auto-row',
+    dataset: { project: name },
+    style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderBottom: '1px solid rgba(255,255,255,.05)', fontSize: '12px' },
+  });
+
+  const toggle = el('span', {
+    class: 'auto-toggle',
+    style: { color: active ? '#9ece6a' : '#565f89', cursor: 'pointer' },
+    title: active ? 'Click para pausar' : 'Click para activar',
+    text: active ? '●' : '○',
+    onclick: async () => {
+      await ipcRenderer.invoke('auto:toggle-active', name, !active);
+      renderAuto();
+    },
+  });
+
+  const label = el('span', {
+    style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+    text: name,
+  });
+
+  const select = el('select', {
+    class: 'auto-template',
+    style: { fontSize: '10px', padding: '1px 4px', background: 'rgba(255,255,255,.05)', color: '#c0caf5', border: '1px solid rgba(255,255,255,.1)', borderRadius: '3px' },
+    onchange: async () => {
+      const val = select.value;
+      await ipcRenderer.invoke('auto:set-objective', name, val ? { template: val } : null);
+      renderAuto();
+    },
+  });
+  select.appendChild(el('option', { value: '', text: '— sin objetivo —' }));
+  for (const t of AUTO_TEMPLATES) {
+    const opt = el('option', { value: t.name, text: t.label });
+    if (tpl === t.name) opt.selected = true;
+    select.appendChild(opt);
+  }
+
+  const scoreLabel = el('span', {
+    style: { color: '#565f89', fontSize: '10px', minWidth: '30px', textAlign: 'right' },
+    text: `${score}/10`,
+  });
+
+  row.append(toggle, label, select, scoreLabel);
+  return row;
+}
+
+function autoEventNode(e) {
+  const t = new Date(e.at).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  let color = '#c0caf5';
+  let icon = '·';
+  if (e.type === 'skill-executed') { color = e.outcome === 'ok' ? '#9ece6a' : '#f7768e'; icon = e.outcome === 'ok' ? '✓' : '✗'; }
+  else if (e.type === 'goal-reached') { color = '#9ece6a'; icon = '★'; }
+  else if (e.type === 'goal-regressed') { color = '#e0af68'; icon = '↓'; }
+  else if (e.type === 'circuit-breaker-trip') { color = '#f7768e'; icon = '⛔'; }
+  else if (e.type === 'planner-decision') { color = '#7aa2f7'; icon = '→'; }
+  else if (e.type === 'dry-run') { color = '#e0af68'; icon = '◐'; }
+  else if (e.type === 'tick-skip') { color = '#565f89'; icon = '·'; }
+  else if (e.type === 'tick-error' || e.type === 'analyze-error') { color = '#f7768e'; icon = '!'; }
+
+  const detail = e.project ? `${e.project} ${e.skill || ''}`.trim() : (e.reason || e.reasoning || '');
+  return el('div', { style: { color }, text: `${t} ${icon} ${e.type} ${detail}` });
+}
+
+async function renderAuto() {
+  const cfg = await ipcRenderer.invoke('auto:get-config');
+  const status = await ipcRenderer.invoke('auto:get-status');
+  const events = await ipcRenderer.invoke('auto:get-events', 50);
+  const projects = Object.entries(cfg.projects || {});
+  const active = projects.filter(([, p]) => p.active);
+  const paused = projects.filter(([, p]) => !p.active);
+
+  panelContent.replaceChildren();
+
+  // Header con dry-run badge + controls
+  const header = el('div', {
+    style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' },
+  });
+  const dryColor = status.dryRun ? '#e0af68' : '#9ece6a';
+  header.appendChild(el('span', {
+    style: { color: dryColor, background: dryColor + '26', padding: '2px 6px', borderRadius: '3px', fontSize: '10px' },
+    text: status.dryRun ? 'DRY-RUN' : 'LIVE',
+  }));
+  header.appendChild(el('span', {
+    style: { color: '#7aa2f7', fontSize: '10px' },
+    text: `${active.length}/${projects.length} activos`,
+  }));
+  const dryBtn = el('button', {
+    class: 'scan-btn',
+    style: { marginLeft: 'auto' },
+    text: status.dryRun ? 'Desactivar dry-run' : 'Activar dry-run',
+    onclick: async () => {
+      await ipcRenderer.invoke('auto:set-dry-run', !status.dryRun);
+      renderAuto();
+    },
+  });
+  const tickBtn = el('button', {
+    class: 'scan-btn',
+    text: 'Tick ahora',
+    onclick: async () => {
+      tickBtn.disabled = true;
+      tickBtn.textContent = 'Ejecutando…';
+      await ipcRenderer.invoke('auto:tick-now');
+      setTimeout(() => renderAuto(), 500);
+    },
+  });
+  header.append(dryBtn, tickBtn);
+  panelContent.appendChild(header);
+
+  // Sección activos
+  panelContent.appendChild(el('div', {
+    style: { fontSize: '11px', color: '#7aa2f7', marginBottom: '6px', textTransform: 'uppercase' },
+    text: `Activos (${active.length})`,
+  }));
+  if (!active.length) {
+    panelContent.appendChild(el('div', {
+      class: 'empty-msg',
+      style: { padding: '12px', color: '#565f89' },
+      text: 'Ningún proyecto activo. Activa uno abajo para empezar.',
+    }));
+  } else {
+    for (const [name, p] of active) panelContent.appendChild(autoProjectRow(name, p, true));
+  }
+
+  // Sección pausados
+  panelContent.appendChild(el('div', {
+    style: { fontSize: '11px', color: '#565f89', marginTop: '16px', marginBottom: '6px', textTransform: 'uppercase' },
+    text: `Pausados (${paused.length})`,
+  }));
+  for (const [name, p] of paused.slice(0, 40)) panelContent.appendChild(autoProjectRow(name, p, false));
+  if (paused.length > 40) {
+    panelContent.appendChild(el('div', {
+      style: { padding: '6px', color: '#565f89', fontSize: '10px' },
+      text: `+${paused.length - 40} más…`,
+    }));
+  }
+
+  // Feed
+  panelContent.appendChild(el('div', {
+    style: { fontSize: '11px', color: '#7aa2f7', marginTop: '16px', marginBottom: '6px', textTransform: 'uppercase' },
+    text: `Feed (últimos ${events.length})`,
+  }));
+  if (!events.length) {
+    panelContent.appendChild(el('div', {
+      class: 'empty-msg',
+      style: { padding: '8px', color: '#565f89' },
+      text: 'Sin eventos aún. El orquestador emite en cada tick.',
+    }));
+  } else {
+    const feedBox = el('div', {
+      style: { fontFamily: 'monospace', fontSize: '10px', lineHeight: '1.4' },
+    });
+    for (const e of events.slice(-30).reverse()) feedBox.appendChild(autoEventNode(e));
+    panelContent.appendChild(feedBox);
+  }
+}
+
+// Stream de eventos push desde main → renderer (throttled refresh si tab activa)
+ipcRenderer.on('auto:event', () => {
+  if (currentTab === 'auto') {
+    if (!window.__autoRefreshTimer) {
+      window.__autoRefreshTimer = setTimeout(() => {
+        window.__autoRefreshTimer = null;
+        renderAuto().catch(() => {});
+      }, 1000);
+    }
+  }
+});
 
 let healthFilter = 'all'; // 'all', 'high', 'medium', 'low', 'ignored'
 let configSectionOpen = false;
