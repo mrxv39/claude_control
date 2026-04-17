@@ -31,3 +31,6 @@ SessionMonitor/*_log.txt
 docs/maintenance-form-*.html
 docs/maintenance-decisions.json
 docs/.maintenance-port
+
+# Runtime locks
+.claude/*.lock
