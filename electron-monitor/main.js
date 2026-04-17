@@ -20,6 +20,7 @@ const telemetry = require('./lib/telemetry');
 const autonomousStore = require('./lib/autonomous-store');
 const { AutonomousOrchestrator } = require('./lib/autonomous-orchestrator');
 const tokenReport = require('./lib/token-report');
+const goalSuggester = require('./lib/goal-suggester');
 
 const {
   FindWindowA, ShowWindow, IsIconic, IsWindow, MoveWindow,
@@ -674,6 +675,113 @@ ipcMain.handle('auto:token-report', (_ev, opts) => {
 ipcMain.handle('auto:token-avg', (_ev, windowDays) => {
   const entries = tokenHistory.readHistory(500);
   return tokenReport.computeAverage(entries, { windowDays: windowDays || 7 });
+});
+
+// Reads project files + git log for the detail drawer.
+ipcMain.handle('auto:get-project-info', async (_ev, name) => {
+  const project = autonomousStore.getProject(name);
+  if (!project || !project.path) return { name, error: 'no-path' };
+  const p = project.path;
+  const out = { name, path: p, stack: project.stack, score: project.score };
+
+  // README preview (first 2000 chars)
+  const readmeCandidates = ['README.md', 'README.MD', 'Readme.md', 'readme.md', 'README'];
+  for (const f of readmeCandidates) {
+    try {
+      const full = path.join(p, f);
+      if (fs.existsSync(full)) {
+        out.readme = fs.readFileSync(full, 'utf-8').slice(0, 2000);
+        break;
+      }
+    } catch {}
+  }
+
+  // CLAUDE.md preview
+  try {
+    const claudeMd = path.join(p, 'CLAUDE.md');
+    if (fs.existsSync(claudeMd)) {
+      out.claudeMd = fs.readFileSync(claudeMd, 'utf-8').slice(0, 2000);
+    }
+  } catch {}
+
+  // package.json or Cargo.toml summary
+  try {
+    const pkg = path.join(p, 'package.json');
+    const cargo = path.join(p, 'Cargo.toml');
+    if (fs.existsSync(pkg)) {
+      out.packageManifest = JSON.parse(fs.readFileSync(pkg, 'utf-8'));
+    } else if (fs.existsSync(cargo)) {
+      out.packageManifest = { name: require('path').basename(p), _source: 'Cargo.toml' };
+    }
+  } catch {}
+
+  // Recent git info
+  try {
+    out.lastCommitDays = await new Promise(resolve => {
+      execFile('git', ['log', '-1', '--format=%ct'], { cwd: p, timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout.trim()) return resolve(null);
+        const ts = parseInt(stdout.trim(), 10);
+        if (isNaN(ts)) return resolve(null);
+        resolve(Math.floor((Date.now() / 1000 - ts) / 86400));
+      });
+    });
+  } catch {}
+
+  try {
+    out.recentCommits = await new Promise(resolve => {
+      execFile('git', ['log', '--since=14.days', '--oneline'], { cwd: p, timeout: 5000 }, (err, stdout) => {
+        if (err) return resolve(0);
+        resolve(stdout.trim().split('\n').filter(Boolean).length);
+      });
+    });
+  } catch {}
+
+  try {
+    out.recentCommitsList = await new Promise(resolve => {
+      execFile('git', ['log', '-5', '--format=%h %s'], { cwd: p, timeout: 5000 }, (err, stdout) => {
+        if (err) return resolve([]);
+        resolve(stdout.trim().split('\n').filter(Boolean).slice(0, 5));
+      });
+    });
+  } catch {}
+
+  return out;
+});
+
+// Heurística local (sin LLM) para sugerir plantilla. Rápida y gratis.
+ipcMain.handle('auto:suggest-goal', async (_ev, name) => {
+  try {
+    const info = await (async () => {
+      // Reuse the same logic as get-project-info by calling the handler's work directly
+      const p = autonomousStore.getProject(name);
+      return {
+        name,
+        stack: p.stack,
+        score: p.score,
+        readme: null,  // will be filled below
+        packageManifest: null,
+        recentCommits: 0,
+        lastCommitDays: null,
+        checks: p.checks || {},
+      };
+    })();
+    // Enrich with file reads
+    const project = autonomousStore.getProject(name);
+    if (project.path) {
+      try {
+        const readme = path.join(project.path, 'README.md');
+        if (fs.existsSync(readme)) info.readme = fs.readFileSync(readme, 'utf-8').slice(0, 2000);
+      } catch {}
+      try {
+        const pkg = path.join(project.path, 'package.json');
+        if (fs.existsSync(pkg)) info.packageManifest = JSON.parse(fs.readFileSync(pkg, 'utf-8'));
+      } catch {}
+    }
+    // Heurística local (no LLM) por ahora — instantánea
+    return goalSuggester.heuristicSuggest(info);
+  } catch (e) {
+    return { template: 'MVP-lanzable', confidence: 0.2, reasoning: `error: ${e.message}`, source: 'heuristic' };
+  }
 });
 
 ipcMain.handle('track', (_ev, type, payload) => {
