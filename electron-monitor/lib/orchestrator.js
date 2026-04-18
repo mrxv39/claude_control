@@ -201,7 +201,7 @@ async function tick(deps) {
   } catch (e) {
     execResult = { status: 'failed', error: e.message };
   }
-  const endedAt = Date.now();
+  const endedAt = deps.now != null ? deps.now : Date.now();
   const outcome = execResult?.status === 'done' ? 'ok' : 'fail';
 
   // 8. Actualizar history + circuit breaker
