@@ -33,90 +33,16 @@
 const { ipcRenderer } = require('electron');
 const { esc, COLORS, rateColor, el } = require('./renderer/common.js');
 const { initBar } = require('./renderer/bar.js');
+const { initPanelCore } = require('./renderer/panel-core.js');
 // Same index.html serves two windows: the always-on-top bar (default) and the
 // orchestrator panel (loaded with hash '#panel'). The flag below gates the
 // init paths so each window only runs the JS it needs.
 const isPanel = window.location.hash === '#panel';
 if (isPanel) document.body.classList.add('panel-mode');
 
-initBar({ ipcRenderer, isPanel });
+const barApi = initBar({ ipcRenderer, isPanel });
 
-
-// ---- Orchestrator panel ----
-const gearBtn = document.getElementById('gear-btn');
-const panel = document.getElementById('panel');
 const panelContent = document.getElementById('panel-content');
-const budgetDisplay = document.getElementById('budget-display');
-let currentTab = 'health';
-
-async function togglePanel() {
-  if (isPanel) {
-    // We're in the panel window — closing the IPC destroys this window.
-    await ipcRenderer.invoke('toggle-panel');
-    return;
-  }
-  const isOpen = await ipcRenderer.invoke('toggle-panel');
-  gearBtn.classList.toggle('active', isOpen);
-  try { ipcRenderer.invoke('track', 'panel_toggle', { open: !!isOpen }); } catch {}
-}
-if (gearBtn) gearBtn.addEventListener('click', togglePanel);
-document.getElementById('panel-close-btn').addEventListener('click', togglePanel);
-if (!isPanel) {
-  document.getElementById('close-btn').addEventListener('click', () => {
-    ipcRenderer.invoke('hide-bar');
-  });
-}
-// Bar window: keep the gear's "active" state in sync when the panel window
-// is closed externally (taskbar, Alt+F4, etc.).
-ipcRenderer.on('panel-closed', () => {
-  if (gearBtn) gearBtn.classList.remove('active');
-});
-// Panel window: load the initial tab content as soon as the DOM is ready.
-if (isPanel) {
-  // Mark gear as null-safe in panel mode (no gear button rendered).
-  loadTab('health');
-}
-const minBtn = document.getElementById('minimize-all-btn');
-let minimizedHwnds = [];
-minBtn.addEventListener('click', async () => {
-  if (minimizedHwnds.length > 0) {
-    await ipcRenderer.invoke('restore-wt', minimizedHwnds);
-    minimizedHwnds = [];
-    minBtn.textContent = '\u2584';
-    minBtn.title = 'Minimizar todas las consolas';
-  } else {
-    minimizedHwnds = await ipcRenderer.invoke('minimize-all-wt');
-    if (minimizedHwnds.length > 0) {
-      minBtn.textContent = '\u25FB';
-      minBtn.title = 'Restaurar consolas minimizadas';
-    }
-  }
-});
-
-document.querySelectorAll('.panel-tab').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.panel-tab').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
-    btn.classList.add('active');
-    btn.setAttribute('aria-selected', 'true');
-    currentTab = btn.dataset.tab;
-    loadTab(currentTab);
-    try { ipcRenderer.invoke('track', 'panel_tab_view', { tab: currentTab }); } catch {}
-  });
-});
-
-async function loadTab(tab) {
-  // Update budget display
-  try {
-    const budget = await ipcRenderer.invoke('get-budget-status');
-    budgetDisplay.textContent = `$${budget.todaySpent.toFixed(2)} / $${budget.dailyBudget.toFixed(2)}`;
-  } catch {}
-
-  if (tab === 'health') await renderHealth();
-  else if (tab === 'queue') await renderQueue();
-  else if (tab === 'log') await renderLog();
-  else if (tab === 'stats') await renderStats();
-  else if (tab === 'auto') await renderAuto();
-}
 
 // ---- Tab Autónomo (sistema nuevo F1+) — DOM-API only, sin innerHTML ----
 
@@ -480,7 +406,7 @@ async function renderAuto() {
 
 // Stream de eventos push desde main → renderer (throttled refresh si tab activa)
 ipcRenderer.on('auto:event', () => {
-  if (currentTab === 'auto') {
+  if (panelCore.getCurrentTab() === 'auto') {
     if (!window.__autoRefreshTimer) {
       window.__autoRefreshTimer = setTimeout(() => {
         window.__autoRefreshTimer = null;
@@ -1378,9 +1304,23 @@ async function renderStats() {
   panelContent.innerHTML = html;
 }
 
+// ---- Panel core init (debe ir al final: tab renderers ya declarados arriba) ----
+const panelCore = initPanelCore({
+  ipcRenderer,
+  isPanel,
+  tabRenderers: {
+    health: renderHealth,
+    queue: renderQueue,
+    log: renderLog,
+    stats: renderStats,
+    auto: renderAuto,
+  },
+});
+
 // Live scheduler status updates — only relevant in the panel window.
 ipcRenderer.on('scheduler-status', (ev, status) => {
   if (!isPanel) return;
+  const currentTab = panelCore.getCurrentTab();
   if (currentTab === 'queue') renderQueue();
   if (currentTab === 'stats') renderStats();
 });
@@ -1403,7 +1343,7 @@ ipcRenderer.on('hook-missing', () => {
   sc.addEventListener('click', async () => {
     setChipText('Configurando...', '#e0af68');
     const ok = await ipcRenderer.invoke('run-setup-hook');
-    if (ok) { sc.remove(); refresh(); }
+    if (ok) { sc.remove(); barApi.refresh(); }
     else { setChipText('Error al configurar', '#f7768e'); }
   });
   document.querySelector('.chips').prepend(sc);
