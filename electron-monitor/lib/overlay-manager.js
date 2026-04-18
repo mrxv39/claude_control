@@ -56,6 +56,17 @@ function onSkillClick(cb) { onClickCb = cb; }
 const escapeHtml = require('./utils').escapeHtml;
 
 /**
+ * Wrap HTML body into a data: URL suitable for BrowserWindow.loadURL.
+ * @param {string} body - Inner HTML (goes inside <body>)
+ * @returns {string} data: URL
+ */
+function dataUrl(body) {
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(
+    `<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:'Segoe UI',sans-serif;">${body}</body></html>`
+  );
+}
+
+/**
  * @param {string} label
  * @param {string} status - 'BUSY' | 'WAITING' | 'IDLE'
  * @param {string|null} [branch] - Git branch name
@@ -78,10 +89,9 @@ function overlayHtml(label, status, branch, dirty, contextPercent) {
     const ctxColor = contextPercent < 50 ? 'inherit' : contextPercent < 80 ? '#8a6d20' : '#6a1520';
     meta += `<span style="font-size:14px;font-weight:700;margin-left:8px;color:${ctxColor};">${contextPercent}%</span>`;
   }
-  return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
-<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:'Segoe UI',sans-serif;">
-<div style="background:${bg};border:1px solid ${bg};border-top:none;color:${textColor};font-size:16px;font-weight:700;padding:5px 15px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe}${meta}</div>
-</body></html>`);
+  return dataUrl(
+    `<div style="background:${bg};border:1px solid ${bg};border-top:none;color:${textColor};font-size:16px;font-weight:700;padding:5px 15px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe}${meta}</div>`
+  );
 }
 
 /**
@@ -127,10 +137,9 @@ function createOverlay(hwnd, label, status, branch, dirty, contextPercent) {
  */
 function skillButtonHtml(skill) {
   const safe = escapeHtml(skill.length > 14 ? skill.slice(0, 13) + '\u2026' : skill);
-  return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
-<!DOCTYPE html><html><body style="margin:0;padding:0;font-family:'Segoe UI',sans-serif;cursor:pointer;">
-<div onclick="document.title='CLICK'" style="background:rgba(224,175,104,.85);color:#1a1b26;font-size:13px;font-weight:700;padding:5px 12px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;">${safe} \u25B6</div>
-</body></html>`);
+  return dataUrl(
+    `<div onclick="document.title='CLICK'" style="background:rgba(224,175,104,.85);color:#1a1b26;font-size:13px;font-weight:700;padding:5px 12px;border-radius:0 0 8px 8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px;cursor:pointer;">${safe} \u25B6</div>`
+  );
 }
 
 /**
@@ -193,6 +202,22 @@ function syncSkillButtons(sessions, recommendations) {
   }
 }
 
+const OVERLAY_DISPLAY_KEYS = ['label', 'status', 'branch', 'dirty', 'contextPercent'];
+
+/**
+ * Shallow compare two objects over a fixed set of keys.
+ * @param {Object} a
+ * @param {Object} b
+ * @param {string[]} keys
+ * @returns {boolean} true if any key differs
+ */
+function hasChanged(a, b, keys) {
+  for (const k of keys) {
+    if (a[k] !== b[k]) return true;
+  }
+  return false;
+}
+
 /**
  * Sync title overlays to match current session list.
  * @param {Array<{hwnd: number, project: string, status: string, gitBranch?: string, gitDirty?: number, contextPercent?: number}>} sessions
@@ -215,15 +240,11 @@ function syncOverlays(sessions) {
     let info = overlays.get(h);
     if (!info) {
       const win = createOverlay(h, data.label, data.status, data.branch, data.dirty, data.contextPercent);
-      info = { win, label: data.label, status: data.status, branch: data.branch, dirty: data.dirty, contextPercent: data.contextPercent, offscreen: true };
+      info = { win, ...data, offscreen: true };
       overlays.set(h, info);
-    } else if (info.label !== data.label || info.status !== data.status || info.branch !== data.branch || info.dirty !== data.dirty || info.contextPercent !== data.contextPercent) {
+    } else if (hasChanged(info, data, OVERLAY_DISPLAY_KEYS)) {
       info.win.loadURL(overlayHtml(data.label, data.status, data.branch, data.dirty, data.contextPercent));
-      info.label = data.label;
-      info.status = data.status;
-      info.branch = data.branch;
-      info.dirty = data.dirty;
-      info.contextPercent = data.contextPercent;
+      Object.assign(info, data);
     }
   }
 }
