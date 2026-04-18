@@ -5,6 +5,7 @@
 // el stream auto:event que hace throttled refresh cuando este tab esta activo.
 
 const { el } = require('./common.js');
+const { stackColor, scoreColor, groupByStack, matchesSearch } = require('./tab-auto-utils.js');
 
 const AUTO_TEMPLATES = [
   { name: 'production-ready', label: 'Production-ready' },
@@ -13,25 +14,6 @@ const AUTO_TEMPLATES = [
   { name: 'explorar-idea', label: 'Explorar idea' },
   { name: 'seguro-y-testeado', label: 'Seguro y testeado' },
 ];
-
-// Colores por stack (Tokyo Night palette coherente con el resto de la UI)
-const STACK_COLORS = {
-  'node': '#9ece6a',
-  'python': '#e0af68',
-  'tauri+rust': '#ff9e64',
-  'electron': '#7aa2f7',
-  'python+node': '#bb9af7',
-  'rust': '#ff9e64',
-  'unknown': '#565f89',
-};
-
-function stackColor(stack) { return STACK_COLORS[stack] || '#565f89'; }
-function scoreColor(score) {
-  const n = typeof score === 'number' ? score : 0;
-  if (n >= 7) return '#9ece6a';
-  if (n >= 4) return '#e0af68';
-  return '#f7768e';
-}
 
 const TEMPLATE_DESCRIPTIONS = {
   'production-ready': {
@@ -207,29 +189,6 @@ function createAutoTab({ ipcRenderer }) {
       style: { color: '#565f89', fontWeight: '400' },
       text: `· ${count}`,
     }));
-  }
-
-  function groupByStack(projects) {
-    const groups = {};
-    for (const [name, p] of projects) {
-      const s = p.stack || 'unknown';
-      if (!groups[s]) groups[s] = [];
-      groups[s].push([name, p]);
-    }
-    for (const k of Object.keys(groups)) groups[k].sort((a, b) => a[0].localeCompare(b[0]));
-    const order = ['node', 'tauri+rust', 'rust', 'python', 'python+node', 'electron', 'unknown'];
-    return order
-      .map(s => ({ stack: s, projects: groups[s] || [] }))
-      .filter(g => g.projects.length)
-      .concat(Object.keys(groups).filter(k => !order.includes(k)).map(s => ({ stack: s, projects: groups[s] })));
-  }
-
-  function matchesSearch(name, p, q) {
-    if (!q) return true;
-    const lower = q.toLowerCase();
-    if (name.toLowerCase().includes(lower)) return true;
-    if ((p.stack || '').toLowerCase().includes(lower)) return true;
-    return false;
   }
 
   async function renderAuto() {
