@@ -131,6 +131,30 @@ Ctrl+Click chips to select them. With 2+ selected, windows auto-tile:
 
 ---
 
+## Autonomous orchestrator
+
+Beyond the visual monitor, Claudio Control ships two autonomous execution systems that run Claude Code tasks in the background using unused quota from your 5-hour rate-limit cycle.
+
+### Queue-based scheduler (classic)
+
+A panel (⚙ button on the bar) scans your projects folder, scores each one (1-10) and runs skills from a catalog (`audit-claude-md`, `security-review`, `simplify`, `add-tests`, `dep-update`, `git-cleanup`, `ui-polish`, `supabase-audit`, `perf-audit`, `fix-types` + community skills) on branches `claudio/auto/*`. Never touches `master`, never pushes.
+
+- **Smart pacing** — uses a `progress^0.6 × 95%` target curve to maximize token use inside the 5h cycle without burning the limit early. Modes: burst (15s tick) → accelerate → pace → coast (120s).
+- **Per-project busy** — runs on projects where you don't have an active Claude session. Doesn't block everything because one session is busy.
+- **Priorities** — by last-commit age: high (≤7d), medium (8-30d), low (31-90d), ignored (>90d).
+
+### Goal-driven autonomous system (F1+)
+
+In parallel with the queue scheduler, an `AutonomousOrchestrator` runs in **dry-run mode by default**. For each project marked active in the Autónomo tab, it:
+
+1. Reads the project goal template (`production-ready`, `MVP-lanzable`, `mantenimiento`, `explorar-idea`, `seguro-y-testeado`).
+2. Runs an LLM planner that converts `{goal, current state, checks}` into concrete next actions.
+3. Registers decisions as events in a JSONL log — and, once you toggle to real execution, runs them with circuit-breaker protection and optional auto-PR via `gh pr create`.
+
+Both systems coexist: the classic scheduler runs on every project in `orchestrator.json`; the F1+ system only on projects you explicitly activate.
+
+---
+
 ## Legacy tools (PowerShell)
 
 The repo also includes the original PowerShell-based tools that work without Electron:

@@ -6,18 +6,20 @@
 |---------|--------|-----------------|
 | `main.js` | ~490 | App lifecycle, IPC wiring, window management, auto-tile |
 | `index.html` | ~100 | Renderer shell: bar + panel, carga módulos de `renderer/` |
-| `renderer/*.js` | ~2000 | bar, panel-core, tabs (health/queue/log/stats/auto), common |
+| `renderer/*.js` | ~1600 | bar, panel-core, tabs (health/queue/log/stats/auto), common |
 | `styles.css` | ~240 | CSS con custom properties (`:root` vars) |
 | `lib/win32.js` | ~140 | koffi FFI bindings, enumWtWindows, focusWindow |
 | `lib/overlay-manager.js` | ~320 | Overlay BrowserWindows sobre cada WT |
 | `lib/notifications.js` | ~175 | Toast + chime + status change tracking |
 | `lib/orchestrator-store.js` | ~260 | Persistencia: orchestrator.json + log JSONL |
+| `lib/orchestrator.js` | ~260 | Lógica pura del orchestrator (enqueue, transitions) |
 | `lib/scheduler.js` | ~550 | Pacing, auto-enqueue, tick loop |
 | `lib/scheduler-priority.js` | ~120 | Lógica pura: priorización y selección de skills |
 | `lib/executor.js` | ~425 | Spawn `claude --print`, branch management |
 | `lib/skill-analyzer.js` | ~300 | Heuristic + Claude analysis de skills |
 | `lib/token-monitor.js` | ~340 | Rate limits, pacing decisions |
 | `lib/token-history.js` | ~130 | JSONL history por ciclo 5h |
+| `lib/token-report.js` | ~220 | Agregación/ranking de ciclos para reports |
 | `lib/stats-aggregator.js` | ~130 | Dashboard data aggregation |
 | `lib/project-scanner.js` | ~145 | Discover projects in configured dirs |
 | `lib/project-analyzer.js` | ~180 | Health checks (git, deps, tests) |
@@ -27,13 +29,28 @@
 | `lib/license.js` | ~225 | First-run gate: machineId, register/validate, cache |
 | `lib/telemetry.js` | ~285 | Event batching, heartbeat, offline queue JSONL |
 | `lib/startup-helpers.js` | ~75 | resolveScript, checkForUpdates, setupStatusLine, hook check |
+| `lib/autonomous-orchestrator.js` | ~155 | Loop F1+ dry-run (observa, planifica, decide) |
+| `lib/autonomous-store.js` | ~230 | Persistencia sistema autónomo: config + projects + events JSONL |
+| `lib/planner.js` | ~350 | Planner LLM: convierte objetivo+estado en acciones |
+| `lib/planner-learner.js` | ~180 | Retroalimentación del planner tras resultados |
+| `lib/planner-pending.js` | ~165 | Cola pendiente del planner entre ticks |
+| `lib/evaluator.js` | ~150 | Evalúa resultados vs objetivo del proyecto |
+| `lib/forecast.js` | ~205 | Previsión de tokens por día/ciclo |
+| `lib/goals.js` | ~340 | Plantillas de objetivo (production-ready, MVP, etc.) + checks |
+| `lib/goal-suggester.js` | ~285 | Heurística local + Claude Haiku para sugerir plantilla |
+| `lib/digest.js` | ~225 | Resumen Claude del estado del sistema autónomo |
+| `lib/auto-pr.js` | ~225 | Integración con `gh pr create` post-ejecución |
+| `lib/undo.js` | ~200 | Deshacer última ejecución autónoma |
+| `lib/circuit-breaker.js` | ~105 | Corta ejecuciones repetidas que fallan |
+| `lib/telegram-bot.js` | ~190 | Hooks de notificación Telegram (opt-in) |
+| `lib/utils.js` | ~12 | Helpers compartidos (escapeHtml) |
 | `lib/ipc/*.js` | ~540 | Handlers IPC agrupados: window, orchestrator, autonomous |
 | `activation.html` | ~235 | First-run modal: machineId + email + activate |
 
 ## Tests
 
 - Framework: **vitest** (`npm test` = `vitest run`)
-- 720 tests en 34 archivos (ver `tests/*.test.js`)
+- 757 tests en 36 archivos (ver `tests/*.test.js`)
 - Solo módulos de lógica pura (sin FFI/Electron)
 
 ## IPC Channels (main ↔ renderer)
@@ -196,6 +213,36 @@ Al arrancar, `app.whenReady` llama a `license.checkLicenseGate()` ANTES de crear
 - `endSession()` en `before-quit` hace flush final + heartbeat final.
 - **Eventos whitelisted**: `app_start`, `app_stop`, `panel_toggle`, `panel_tab_view`, `skill_run`, `skill_enqueue`, `scheduler_pause`, `scheduler_resume`, `session_focus`, `session_idle`, `update_available`, `update_applied`, `error`.
 - **Puntos de instrumentación**: `main.js` (app_start/stop, scheduler pause/resume, update_available, skill_enqueue manual), `executor.js:370` (skill_run), `notifications.js:88` (session_idle), `index.html` (panel_toggle, panel_tab_view, session_focus).
+
+## Sistema autónomo F1+ (AutonomousOrchestrator)
+
+Sistema paralelo al scheduler basado en **objetivo por proyecto + LLM planner**. Arranca en `app.whenReady` (`main.js:465`) en modo **dry-run por defecto** — observa y planifica, pero no ejecuta hasta que el usuario activa ejecución real desde la pestaña Autónomo.
+
+- **AutonomousOrchestrator** (`lib/autonomous-orchestrator.js`): loop de ticks que para cada proyecto activo llama al planner, registra eventos y (si `dryRun=false`) ejecuta.
+- **Planner** (`lib/planner.js` + `planner-pending.js` + `planner-learner.js`): convierte `{objetivo, estado actual, checks}` en acciones concretas. Mantiene una pending queue entre ticks para no duplicar planes. Aprende de resultados (`planner-learner`) para ajustar sugerencias.
+- **Evaluator** (`lib/evaluator.js`): evalúa el resultado vs el objetivo del proyecto.
+- **Goals** (`lib/goals.js`): 5 plantillas (`production-ready`, `MVP-lanzable`, `mantenimiento`, `explorar-idea`, `seguro-y-testeado`) con sus checks y criterios de éxito. Descritas en `renderer/tab-auto.js:TEMPLATE_DESCRIPTIONS`.
+- **Goal suggester** (`lib/goal-suggester.js`): heurística local gratis + opcional Claude Haiku (~1-2k tokens) para sugerir plantilla a partir de README/CLAUDE.md/package.json/commits.
+- **Circuit breaker** (`lib/circuit-breaker.js`): corta la ejecución en un proyecto si falla varias veces seguidas en poco tiempo.
+- **Auto-PR** (`lib/auto-pr.js`): tras una ejecución con cambios, abre un PR vía `gh pr create` en una rama `claudio/auto/*`.
+- **Undo** (`lib/undo.js`): deshace la última ejecución autónoma (reset de rama).
+- **Forecast** (`lib/forecast.js`): proyecta uso esperado de tokens por día/ciclo.
+- **Digest** (`lib/digest.js`): resumen Claude del estado del sistema autónomo (proyectos activos, eventos recientes, tokens).
+- **Telegram bot** (`lib/telegram-bot.js`): notificaciones opt-in de eventos del sistema autónomo.
+
+**Persistencia** (`lib/autonomous-store.js`):
+- `~/.claude/claudio-state/autonomous-config.json` — config (dryRun, projects con `objective`, `active`, stack, score).
+- `~/.claude/claudio-state/autonomous-events.jsonl` — append-only con todos los eventos (tick-start, plan, action, result, error).
+
+**Tab Autónomo** (`renderer/tab-auto.js`):
+- Header con indicador dry-run/real y botón tick-now.
+- Fila por proyecto con toggle activar/pausar, stack, score, objetivo, snippet del último evento.
+- Drawer de detalle: preview README/CLAUDE.md, análisis Claude Haiku bajo demanda, selector de plantilla.
+- Stream `auto:event` (main→renderer) con refresh throttled solo cuando este tab está activo.
+
+**IPC autónomo** (prefijo `auto:*`): `get-config`, `update-config`, `get-project`, `update-project`, `toggle-active`, `set-objective`, `get-events`, `get-status`, `set-dry-run`, `tick-now`, `start`, `stop`, `token-report`, `token-avg`, `get-project-info`, `analyze-project`, `suggest-goal`.
+
+**Coexistencia con el scheduler clásico**: los dos sistemas conviven. El scheduler clásico sigue ejecutando la cola por prioridades/pacing sobre TODOS los proyectos del `orchestrator.json`. El autónomo F1+ sólo actúa en proyectos marcados `active=true` en `autonomous-config.json`.
 
 ## Smart Pacing (scheduler.js + token-monitor.js)
 
