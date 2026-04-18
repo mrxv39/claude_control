@@ -24,6 +24,7 @@
       "activation.html",
       "styles.css",
       "lib/**/*.js",
+      "renderer/**/*.js",
       "get-sessions.ps1",
       "claude-state-hook.ps1",
       "icon.ico",
