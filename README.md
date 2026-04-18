@@ -5,7 +5,7 @@
 An always-on-top bar that shows all your Claude Code sessions at a glance: which ones are working, which ones are waiting for input, and lets you switch between them with a single click.
 
 ![Windows 11](https://img.shields.io/badge/Windows-11-0078D4?logo=windows11)
-![Electron](https://img.shields.io/badge/Electron-35-47848F?logo=electron)
+![Electron](https://img.shields.io/badge/Electron-41-47848F?logo=electron)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---

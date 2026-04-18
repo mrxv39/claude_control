@@ -4,32 +4,36 @@
 
 | Archivo | Líneas | Responsabilidad |
 |---------|--------|-----------------|
-| `main.js` | ~590 | App lifecycle, IPC handlers, window management, auto-tile |
-| `index.html` | ~840 | Renderer: chips, panel (4 tabs), canvas charts |
-| `styles.css` | ~230 | CSS con custom properties (`:root` vars) |
-| `lib/win32.js` | ~120 | koffi FFI bindings, enumWtWindows, focusWindow |
-| `lib/overlay-manager.js` | ~230 | Overlay BrowserWindows sobre cada WT |
-| `lib/notifications.js` | ~140 | Toast + chime + status change tracking |
-| `lib/orchestrator-store.js` | ~200 | Persistencia: orchestrator.json + log JSONL |
-| `lib/scheduler.js` | ~590 | Pacing, auto-enqueue, tick loop |
-| `lib/executor.js` | ~390 | Spawn `claude --print`, branch management |
-| `lib/skill-analyzer.js` | ~250 | Heuristic + Claude analysis de skills |
-| `lib/token-monitor.js` | ~300 | Rate limits, pacing decisions |
-| `lib/token-history.js` | ~100 | JSONL history por ciclo 5h |
-| `lib/stats-aggregator.js` | ~110 | Dashboard data aggregation |
-| `lib/project-scanner.js` | ~120 | Discover projects in configured dirs |
-| `lib/project-analyzer.js` | ~140 | Health checks (git, deps, tests) |
-| `lib/git-status.js` | ~50 | Branch + dirty count per CWD |
-| `lib/conversation-reader.js` | ~180 | Read Claude JSONL for log display |
-| `lib/statusline-writer.js` | ~80 | Write rate-limits.json for statusLine |
-| `lib/license.js` | ~180 | First-run gate: machineId, register/validate, cache |
-| `lib/telemetry.js` | ~220 | Event batching, heartbeat, offline queue JSONL |
-| `activation.html` | ~200 | First-run modal: machineId + email + activate |
+| `main.js` | ~490 | App lifecycle, IPC wiring, window management, auto-tile |
+| `index.html` | ~100 | Renderer shell: bar + panel, carga módulos de `renderer/` |
+| `renderer/*.js` | ~2000 | bar, panel-core, tabs (health/queue/log/stats/auto), common |
+| `styles.css` | ~240 | CSS con custom properties (`:root` vars) |
+| `lib/win32.js` | ~140 | koffi FFI bindings, enumWtWindows, focusWindow |
+| `lib/overlay-manager.js` | ~320 | Overlay BrowserWindows sobre cada WT |
+| `lib/notifications.js` | ~175 | Toast + chime + status change tracking |
+| `lib/orchestrator-store.js` | ~260 | Persistencia: orchestrator.json + log JSONL |
+| `lib/scheduler.js` | ~550 | Pacing, auto-enqueue, tick loop |
+| `lib/scheduler-priority.js` | ~120 | Lógica pura: priorización y selección de skills |
+| `lib/executor.js` | ~425 | Spawn `claude --print`, branch management |
+| `lib/skill-analyzer.js` | ~300 | Heuristic + Claude analysis de skills |
+| `lib/token-monitor.js` | ~340 | Rate limits, pacing decisions |
+| `lib/token-history.js` | ~130 | JSONL history por ciclo 5h |
+| `lib/stats-aggregator.js` | ~130 | Dashboard data aggregation |
+| `lib/project-scanner.js` | ~145 | Discover projects in configured dirs |
+| `lib/project-analyzer.js` | ~180 | Health checks (git, deps, tests) |
+| `lib/git-status.js` | ~70 | Branch + dirty count per CWD |
+| `lib/conversation-reader.js` | ~200 | Read Claude JSONL for log display |
+| `lib/statusline-writer.js` | ~100 | Write rate-limits.json for statusLine |
+| `lib/license.js` | ~225 | First-run gate: machineId, register/validate, cache |
+| `lib/telemetry.js` | ~285 | Event batching, heartbeat, offline queue JSONL |
+| `lib/startup-helpers.js` | ~75 | resolveScript, checkForUpdates, setupStatusLine, hook check |
+| `lib/ipc/*.js` | ~540 | Handlers IPC agrupados: window, orchestrator, autonomous |
+| `activation.html` | ~235 | First-run modal: machineId + email + activate |
 
 ## Tests
 
 - Framework: **vitest** (`npm test` = `vitest run`)
-- 310 tests en 18 archivos: orchestrator-store (14), scheduler (22), skill-analyzer (16), token-monitor (17), utils (8), token-history (16), stats-aggregator (8), conversation-reader (22), project-analyzer (11), appbar (15), notifications (14), overlay-manager (15), executor (27), git-status (18), project-scanner (20), statusline-writer (18), license (22), telemetry (27)
+- 720 tests en 34 archivos (ver `tests/*.test.js`)
 - Solo módulos de lógica pura (sin FFI/Electron)
 
 ## IPC Channels (main ↔ renderer)
