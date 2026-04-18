@@ -34,6 +34,7 @@ const { ipcRenderer } = require('electron');
 const { esc, COLORS, rateColor, el } = require('./renderer/common.js');
 const { initBar } = require('./renderer/bar.js');
 const { initPanelCore } = require('./renderer/panel-core.js');
+const { createLogTab } = require('./renderer/tab-log.js');
 // Same index.html serves two windows: the always-on-top bar (default) and the
 // orchestrator panel (loaded with hash '#panel'). The flag below gates the
 // init paths so each window only runs the JS it needs.
@@ -1093,96 +1094,6 @@ async function showAddTaskDialog() {
   });
   cancelBtn.addEventListener('click', () => renderQueue());
 }
-
-let selectedSessionCwd = null;
-
-async function renderLog() {
-  let html = '';
-
-  // Session selector (from active sessions)
-  html += '<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">';
-  html += '<span style="font-size:11px;color:#565f89;">Sesión:</span>';
-  html += '<select id="log-session-select" style="background:#1e1e2e;border:1px solid #2a2b3d;color:#c0caf5;border-radius:4px;padding:4px 8px;font-size:11px;flex:1;">';
-  html += '<option value="">— Seleccionar sesión —</option>';
-
-  try {
-    const sessions = await ipcRenderer.invoke('get-sessions');
-    const seen = new Set();
-    for (const s of sessions) {
-      if (s.cwd && s.cwd !== 'N/A' && !seen.has(s.cwd)) {
-        seen.add(s.cwd);
-        const sel = s.cwd === selectedSessionCwd ? ' selected' : '';
-        html += `<option value="${esc(s.cwd)}"${sel}>${esc(s.project || s.cwd)}</option>`;
-      }
-    }
-  } catch {}
-
-  html += '</select>';
-
-  // Also show orchestrator execution log toggle
-  html += '<button class="scan-btn" id="show-exec-log" style="font-size:10px;padding:2px 8px;">Historial auto</button>';
-  html += '</div>';
-
-  // Show conversation log if session selected
-  if (selectedSessionCwd) {
-    let entries = [];
-    try { entries = await ipcRenderer.invoke('get-session-log', selectedSessionCwd); } catch {}
-    if (!entries.length) {
-      html += '<div class="empty-msg">No hay datos de conversación para esta sesión.</div>';
-    } else {
-      for (const entry of entries) {
-        const typeColor = entry.type === 'user' ? '#7aa2f7' :
-                          entry.type === 'assistant' ? '#9ece6a' : '#565f89';
-        const typeLabel = entry.type === 'user' ? 'USER' :
-                          entry.type === 'assistant' ? 'CLAUDE' : 'TOOL';
-        html += `<div class="queue-item" style="align-items:flex-start;">`;
-        html += `<span class="queue-status" style="background:${typeColor}22;color:${typeColor};min-width:50px;text-align:center;">${typeLabel}</span>`;
-        html += `<span class="queue-info" style="font-size:11px;word-break:break-word;">${esc(entry.summary || '...')}</span>`;
-        html += `</div>`;
-      }
-    }
-  } else {
-    html += '<div class="empty-msg">Selecciona una sesión activa para ver su log de conversación.</div>';
-  }
-
-  panelContent.innerHTML = html;
-
-  // Wire session selector
-  const sel = document.getElementById('log-session-select');
-  if (sel) sel.addEventListener('change', (e) => { selectedSessionCwd = e.target.value || null; renderLog(); });
-
-  // Wire execution log button
-  const execBtn = document.getElementById('show-exec-log');
-  if (execBtn) execBtn.addEventListener('click', () => renderExecLog());
-}
-
-async function renderExecLog() {
-  const log = await ipcRenderer.invoke('get-execution-log');
-  if (!log.length) {
-    panelContent.innerHTML = `<div class="empty-msg">No hay ejecuciones autónomas registradas.</div>`;
-    return;
-  }
-  let html = '<div style="font-size:12px;color:#c0caf5;font-weight:600;margin-bottom:8px;">Historial de ejecuciones autónomas</div>';
-  for (const entry of log.reverse()) {
-    const statusClass = entry.status === 'done' ? 'queue-done' : 'queue-failed';
-    const time = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '?';
-    html += `<div class="queue-item">`;
-    html += `<span class="queue-status ${statusClass}">${esc(entry.status || '?')}</span>`;
-    html += `<span class="queue-info">${esc(entry.project || '?')} — ${esc(entry.skill || '?')}`;
-    if (entry.branch) html += ` <span style="color:#bb9af7;font-size:10px;">${esc(entry.branch)}</span>`;
-    html += `</span>`;
-    if (entry.costUsd) html += `<span class="queue-cost">$${entry.costUsd.toFixed(3)}</span>`;
-    html += `<span class="queue-cost">${esc(time)}</span>`;
-    html += `</div>`;
-  }
-  html += '<button class="scan-btn" style="margin-top:8px;" id="exec-back-btn">Volver</button>';
-  // Note: innerHTML is safe here — all dynamic values go through esc() (HTML entity escaping).
-  // This is a local Electron app with contextIsolation:false, no remote content.
-  panelContent.innerHTML = html;
-  const backBtn = document.getElementById('exec-back-btn');
-  if (backBtn) backBtn.addEventListener('click', () => renderLog());
-}
-
 async function buildLiveCycleHtml(live) {
   let h = '<div class="stats-section">';
   h += '<div class="stats-section-title">Ciclo 5h en vivo</div>';
@@ -1305,13 +1216,14 @@ async function renderStats() {
 }
 
 // ---- Panel core init (debe ir al final: tab renderers ya declarados arriba) ----
+const logTab = createLogTab({ ipcRenderer });
 const panelCore = initPanelCore({
   ipcRenderer,
   isPanel,
   tabRenderers: {
     health: renderHealth,
     queue: renderQueue,
-    log: renderLog,
+    log: logTab.renderLog,
     stats: renderStats,
     auto: renderAuto,
   },
