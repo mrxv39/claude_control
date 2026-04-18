@@ -40,6 +40,31 @@ let autoOrchestrator = null; // AutonomousOrchestrator instance (starts in dry-r
 const mainGitCache = {};     // cwd -> { branch, dirty }
 const mainGitCacheTime = {}; // cwd -> timestamp
 const MAIN_GIT_TTL = 30000;
+
+// Bounded-concurrency queue for git-status refreshes. Without this, if many
+// stale cwds expire on the same tick, we'd spawn N git processes at once
+// (each forks git + child_process overhead).
+const GIT_REFRESH_CONCURRENCY = 3;
+let gitRefreshInFlight = 0;
+const gitRefreshQueue = [];
+
+function runGitRefresh(cwd) {
+  gitRefreshInFlight++;
+  gitStatus.getStatus(cwd)
+    .then(g => { mainGitCache[cwd] = g; })
+    .catch(() => {})
+    .finally(() => {
+      gitRefreshInFlight--;
+      const next = gitRefreshQueue.shift();
+      if (next) runGitRefresh(next);
+    });
+}
+
+function scheduleGitRefresh(cwd) {
+  if (gitRefreshInFlight < GIT_REFRESH_CONCURRENCY) runGitRefresh(cwd);
+  else gitRefreshQueue.push(cwd);
+}
+
 let isQuitting = false;
 
 function appBarRegister() { try { registerAppBar(mainWindow.getNativeWindowHandle().readInt32LE(0), BAR_H); } catch (e) { console.error('appBarRegister failed:', e.message); } }
@@ -192,13 +217,13 @@ ipcMain.handle('get-sessions', async () => {
     const wtWindows = enumWtWindows();
     resolveHwnds(arr, wtWindows);
 
-    // Refresh git cache for overlay titles (non-blocking, 30s TTL)
+    // Refresh git cache for overlay titles (non-blocking, 30s TTL, concurrency-capped)
     const now = Date.now();
     const cwds = new Set(arr.filter(s => s.cwd && s.cwd !== 'N/A').map(s => s.cwd));
     for (const cwd of cwds) {
       if (!mainGitCacheTime[cwd] || now - mainGitCacheTime[cwd] > MAIN_GIT_TTL) {
         mainGitCacheTime[cwd] = now;
-        gitStatus.getStatus(cwd).then(g => { mainGitCache[cwd] = g; }).catch(() => {});
+        scheduleGitRefresh(cwd);
       }
     }
     // Enrich sessions with git data for overlays
