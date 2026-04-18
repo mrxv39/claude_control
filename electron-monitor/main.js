@@ -379,67 +379,14 @@ ipcMain.handle('get-sessions', async () => {
   } catch (e) { return []; }
 });
 
-// ---- Auto-update checker ----
+// ---- Startup helpers (update checker, script paths, statusLine, hook check) ----
 const PKG_VERSION = require('./package.json').version;
-
-async function checkForUpdates() {
-  try {
-    const { net } = require('electron');
-    const resp = await net.fetch('https://api.github.com/repos/mrxv39/claude_control/releases/latest');
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const latest = (data.tag_name || '').replace(/^v/, '');
-    if (latest && latest !== PKG_VERSION) {
-      const url = data.html_url || 'https://github.com/mrxv39/claude_control/releases/latest';
-      mainWindow.webContents.send('update-available', latest, url);
-      telemetry.trackEvent('update_available', { from: PKG_VERSION, to: latest });
-    }
-  } catch {}
-}
-
-// ---- Resolve script paths ----
-function resolveScript(name) {
-  const dev = path.join(__dirname, name);
-  if (fs.existsSync(dev)) return dev;
-  return path.join(process.resourcesPath, name);
-}
-
-const CLAUDE_SETTINGS_PATH = path.join(process.env.USERPROFILE, '.claude', 'settings.json');
-
-// ---- Auto-setup statusLine ----
-function setupStatusLine() {
-  try {
-    const settingsPath = CLAUDE_SETTINGS_PATH;
-    if (!fs.existsSync(settingsPath)) return;
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    if (settings.statusLine && settings.statusLine.includes('statusline-writer') && !settings.statusLine.includes('\\\\\\\\')) return;
-    const scriptPath = resolveScript('lib/statusline-writer.js');
-    settings.statusLine = `node "${scriptPath}"`;
-    const tmp = settingsPath + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf-8');
-    fs.renameSync(tmp, settingsPath);
-  } catch {}
-}
-
-// ---- Auto-setup hook check ----
-function checkHookSetup() {
-  try {
-    if (!fs.existsSync(CLAUDE_SETTINGS_PATH)) { mainWindow.webContents.send('hook-missing'); return; }
-    const content = fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf-8');
-    if (!content.includes('claude-state-hook')) {
-      mainWindow.webContents.send('hook-missing');
-    }
-  } catch { mainWindow.webContents.send('hook-missing'); }
-}
-
-ipcMain.handle('run-setup-hook', async () => {
-  try {
-    const script = resolveScript('setup-hook.ps1');
-    execSync(`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${script}"`,
-      { encoding: 'utf-8', timeout: 30000 });
-    return true;
-  } catch { return false; }
+const startup = require('./lib/startup-helpers').init({
+  appRoot: __dirname,
+  getMainWindow: () => mainWindow,
+  telemetry, ipcMain, pkgVersion: PKG_VERSION,
 });
+const { resolveScript, checkForUpdates, setupStatusLine, checkHookSetup } = startup;
 
 // ---- Orchestrator IPC handlers ----
 let panelOpen = false;
