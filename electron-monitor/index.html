@@ -838,7 +838,7 @@ async function openProjectDrawer(name) {
   drawer.appendChild(headerRow);
 
   // Metadata chips
-  const chips = el('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '12px 0 18px' } });
+  const chips = el('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '12px 0 14px' } });
   if (info.stack) chips.appendChild(metaChip(info.stack, stackColor(info.stack)));
   if (typeof info.score === 'number') chips.appendChild(metaChip(`Score ${info.score}/10`, scoreColor(info.score)));
   if (typeof info.lastCommitDays === 'number') {
@@ -850,6 +850,73 @@ async function openProjectDrawer(name) {
     chips.appendChild(metaChip(`${info.recentCommits} commits /14d`, '#7aa2f7'));
   }
   drawer.appendChild(chips);
+
+  // Detector heurístico rápido: scratchpad / no-codebase
+  const haystack = ((info.readme || '') + ' ' + (info.claudeMd || '')).toLowerCase();
+  const scratchpadSignals = ['scratchpad', 'workspace para tareas', 'sin código de aplicación', 'sin aplicación', 'repositorio de notas', 'solo documentación'];
+  const isScratchpad = scratchpadSignals.some(s => haystack.includes(s));
+  if (isScratchpad) {
+    drawer.appendChild(el('div', {
+      style: {
+        display: 'flex', alignItems: 'center', gap: '10px',
+        padding: '10px 14px', marginBottom: '14px',
+        background: 'rgba(224,175,104,.08)',
+        border: '1px solid rgba(224,175,104,.3)',
+        borderRadius: '6px',
+      },
+    },
+    el('span', { style: { fontSize: '16px' }, text: '🗒' }),
+    el('div', {},
+      el('div', { style: { color: '#e0af68', fontSize: '12px', fontWeight: '600' }, text: 'Workspace / notas' }),
+      el('div', { style: { color: '#a9b1d6', fontSize: '11px', marginTop: '2px' }, text: 'Este repo parece documentación/notas sin código. Probablemente no merece plantilla — considera dejarlo pausado.' }),
+    )));
+  }
+
+  // "Preguntar a Claude" - análisis narrativo
+  const askCard = el('div', {
+    id: 'auto-drawer-ask',
+    style: {
+      padding: '14px 16px', marginBottom: '18px',
+      background: 'linear-gradient(135deg, rgba(187,154,247,.08), rgba(122,162,247,.06))',
+      border: '1px solid rgba(187,154,247,.25)',
+      borderRadius: '8px',
+    },
+  });
+  const askTitle = el('div', {
+    style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' },
+  },
+  el('span', { style: { fontSize: '15px' }, text: '🤖' }),
+  el('span', { style: { color: '#bb9af7', fontSize: '13px', fontWeight: '600' }, text: '¿Qué es este proyecto?' }));
+  askCard.appendChild(askTitle);
+  askCard.appendChild(el('div', {
+    style: { color: '#a9b1d6', fontSize: '11px', marginBottom: '10px', lineHeight: '1.5' },
+    text: 'Claude Haiku leerá README + CLAUDE.md + package.json + últimos commits + archivos en raíz, y te resumirá en 3-4 frases qué hace, en qué estado está, y si vale la pena activarlo. ~1-2k tokens.',
+  }));
+  const askBtn = el('button', {
+    class: 'scan-btn',
+    style: { fontSize: '11px', color: '#bb9af7', borderColor: 'rgba(187,154,247,.4)', background: 'rgba(187,154,247,.15)' },
+    text: '💭 Analizar con Claude',
+    onclick: async () => {
+      askBtn.disabled = true;
+      askBtn.textContent = 'Analizando…';
+      const out = await ipcRenderer.invoke('auto:analyze-project', name);
+      askBtn.remove();
+      const resultBox = el('div', {
+        style: {
+          padding: '12px 14px', marginTop: '4px',
+          background: 'rgba(0,0,0,.2)',
+          borderLeft: '3px solid #bb9af7',
+          borderRadius: '4px',
+          fontSize: '12px', lineHeight: '1.6', color: '#c0caf5',
+          whiteSpace: 'pre-wrap',
+        },
+        text: out.error ? `Error: ${out.error}` : (out.summary || 'Sin respuesta'),
+      });
+      askCard.appendChild(resultBox);
+    },
+  });
+  askCard.appendChild(askBtn);
+  drawer.appendChild(askCard);
 
   // README preview
   if (info.readme) {

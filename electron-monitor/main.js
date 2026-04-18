@@ -748,6 +748,89 @@ ipcMain.handle('auto:get-project-info', async (_ev, name) => {
   return out;
 });
 
+// Analiza un proyecto con Claude Haiku — resumen humano de qué es.
+// ~1-2k tokens por llamada. Es tirar tokens a propósito para ayudar al usuario
+// a recordar/entender proyectos que tiene abandonados.
+ipcMain.handle('auto:analyze-project', async (_ev, name) => {
+  const project = autonomousStore.getProject(name);
+  if (!project?.path) return { error: 'no-path' };
+  const p = project.path;
+
+  // Recolecta señales
+  const parts = [];
+  parts.push(`# Proyecto: ${name}`);
+  parts.push(`Path: ${p}`);
+  parts.push(`Stack detectado: ${project.stack || 'unknown'}`);
+
+  const addFileIf = (relPath, header) => {
+    try {
+      const f = path.join(p, relPath);
+      if (fs.existsSync(f)) {
+        const content = fs.readFileSync(f, 'utf-8').slice(0, 3000);
+        parts.push(`\n## ${header} (${relPath})\n${content}`);
+      }
+    } catch {}
+  };
+  addFileIf('README.md', 'README');
+  addFileIf('CLAUDE.md', 'CLAUDE.md');
+  addFileIf('package.json', 'package.json');
+  addFileIf('Cargo.toml', 'Cargo.toml');
+  addFileIf('pyproject.toml', 'pyproject.toml');
+
+  // Estructura de top level (archivos + dirs de nivel 1)
+  try {
+    const entries = fs.readdirSync(p).slice(0, 40);
+    parts.push(`\n## Archivos en raíz\n${entries.join('\n')}`);
+  } catch {}
+
+  // Últimos commits
+  const recentLog = await new Promise(resolve => {
+    execFile('git', ['log', '-10', '--format=%h %ci %s'], { cwd: p, timeout: 5000 }, (err, stdout) => {
+      resolve(err ? '' : stdout.trim());
+    });
+  });
+  if (recentLog) parts.push(`\n## Últimos 10 commits\n${recentLog}`);
+
+  const context = parts.join('\n').slice(0, 15000);
+  const prompt = `Analiza este proyecto y escríbeme 3-4 frases MUY concretas en español respondiendo:
+
+1. ¿Qué hace este proyecto? (o qué pretendía hacer si está abandonado)
+2. ¿En qué estado está? (vivo, dormido, abandonado, experimento)
+3. ¿Vale la pena activarlo en un orquestador autónomo? Recomendación clara:
+   - activar con plantilla X (nombre concreto: production-ready | MVP-lanzable | mantenimiento | explorar-idea | seguro-y-testeado)
+   - ignorar / pausar (razón breve)
+
+SÉ DIRECTO. Sin preámbulos. Sin markdown. Prosa natural corta.
+
+---
+
+${context}`;
+
+  return new Promise((resolve) => {
+    const args = [
+      '--print', '-p', prompt,
+      '--model', 'haiku',
+      '--max-turns', '1',
+      '--output-format', 'text',
+      '--dangerously-skip-permissions',
+    ];
+    const proc = require('child_process').spawn('claude', args, {
+      cwd: p, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
+    });
+    proc.stdin.end();
+    let out = '', err = '';
+    const timer = setTimeout(() => { try { proc.kill(); } catch {} resolve({ error: 'timeout' }); }, 60000);
+    proc.stdout.on('data', d => { out += d.toString(); });
+    proc.stderr.on('data', d => { err += d.toString(); });
+    proc.on('error', e => { clearTimeout(timer); resolve({ error: e.message }); });
+    proc.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0) return resolve({ error: `exit ${code}: ${err.slice(0, 200)}` });
+      resolve({ summary: out.trim() });
+    });
+  });
+});
+
 // Heurística local (sin LLM) para sugerir plantilla. Rápida y gratis.
 ipcMain.handle('auto:suggest-goal', async (_ev, name) => {
   try {
