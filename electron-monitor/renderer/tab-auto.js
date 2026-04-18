@@ -63,75 +63,35 @@ function createAutoTab({ ipcRenderer }) {
     const row = el('div', {
       class: 'auto-row' + (active ? ' auto-row-active' : ''),
       dataset: { project: name },
-      style: {
-        display: 'grid',
-        gridTemplateColumns: '28px 1fr auto auto',
-        alignItems: 'center',
-        gap: '10px',
-        padding: '8px 12px',
-        borderLeft: `3px solid ${active ? '#9ece6a' : 'transparent'}`,
-        background: active ? 'rgba(158,206,106,.06)' : 'transparent',
-        fontSize: '12px',
-        transition: 'background 120ms',
-      },
     });
 
     const toggle = el('button', {
-      class: 'auto-toggle',
+      class: 'auto-toggle' + (active ? ' on' : ''),
       title: active ? 'Pausar este proyecto' : 'Activar este proyecto',
-      style: {
-        width: '24px', height: '16px', borderRadius: '8px', border: 'none', padding: '0',
-        background: active ? '#9ece6a' : 'rgba(255,255,255,.1)',
-        position: 'relative', cursor: 'pointer', transition: 'background 150ms',
-        flexShrink: '0',
-      },
       onclick: async (ev) => {
         ev.stopPropagation();
         await ipcRenderer.invoke('auto:toggle-active', name, !active);
         renderAuto();
       },
     });
-    toggle.appendChild(el('span', {
-      style: {
-        position: 'absolute', top: '2px', left: active ? '10px' : '2px',
-        width: '12px', height: '12px', borderRadius: '6px',
-        background: active ? '#1a1b26' : '#565f89',
-        transition: 'left 150ms',
-      },
-    }));
+    toggle.appendChild(el('span', { class: 'auto-toggle-knob' }));
 
-    const labelCol = el('div', { style: { minWidth: '0', display: 'flex', alignItems: 'center', gap: '8px' } });
+    const labelCol = el('div', { class: 'auto-label-col' });
     const nameBtn = el('span', {
-      style: {
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        color: active ? '#c0caf5' : '#a9b1d6', fontWeight: active ? '500' : '400',
-        cursor: 'pointer', textDecoration: 'none',
-      },
+      class: 'auto-name',
       title: 'Ver detalle del proyecto',
       text: name,
       onclick: () => openProjectDrawer(name),
     });
-    nameBtn.addEventListener('mouseenter', () => nameBtn.style.textDecoration = 'underline');
-    nameBtn.addEventListener('mouseleave', () => nameBtn.style.textDecoration = 'none');
     labelCol.appendChild(nameBtn);
     labelCol.appendChild(el('span', {
-      style: {
-        flexShrink: '0', color: sColor, background: sColor + '1a',
-        padding: '1px 6px', borderRadius: '3px', fontSize: '9px',
-        textTransform: 'uppercase', letterSpacing: '.3px',
-      },
+      class: 'auto-stack-badge',
+      style: { color: sColor, background: sColor + '1a' },
       text: stack,
     }));
 
     const select = el('select', {
-      class: 'auto-template',
-      style: {
-        fontSize: '11px', padding: '2px 6px',
-        background: tpl ? '#7aa2f726' : 'rgba(255,255,255,.04)',
-        color: tpl ? '#7aa2f7' : '#a9b1d6',
-        border: `1px solid ${tpl ? '#7aa2f7' : 'rgba(255,255,255,.1)'}`,
-        borderRadius: '4px', cursor: 'pointer', minWidth: '140px',
-      },
+      class: 'auto-template' + (tpl ? ' has-tpl' : ''),
       onchange: async () => {
         const val = select.value;
         await ipcRenderer.invoke('auto:set-objective', name, val ? { template: val } : null);
@@ -146,11 +106,8 @@ function createAutoTab({ ipcRenderer }) {
     }
 
     const scorePill = el('span', {
-      style: {
-        color: scColor, background: scColor + '1a',
-        padding: '2px 6px', borderRadius: '4px', fontSize: '11px',
-        textAlign: 'center', minWidth: '40px', fontVariantNumeric: 'tabular-nums',
-      },
+      class: 'auto-score-pill',
+      style: { color: scColor, background: scColor + '1a' },
       text: score != null ? `${score}/10` : '—',
     });
 
@@ -177,18 +134,11 @@ function createAutoTab({ ipcRenderer }) {
 
   function sectionHeader(title, count, color) {
     return el('div', {
-      style: {
-        display: 'flex', alignItems: 'center', gap: '8px',
-        fontSize: '10px', color: color || '#7aa2f7', marginTop: '14px', marginBottom: '4px',
-        textTransform: 'uppercase', letterSpacing: '.5px', fontWeight: '600',
-        padding: '0 12px',
-      },
+      class: 'auto-section-header',
+      style: color ? { color } : {},
     },
     el('span', { text: title }),
-    el('span', {
-      style: { color: '#565f89', fontWeight: '400' },
-      text: `· ${count}`,
-    }));
+    el('span', { class: 'auto-section-count', text: `· ${count}` }));
   }
 
   async function renderAuto() {
