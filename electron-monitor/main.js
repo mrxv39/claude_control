@@ -17,6 +17,10 @@ const overlayManager = require('./lib/overlay-manager');
 const notifications = require('./lib/notifications');
 const license = require('./lib/license');
 const telemetry = require('./lib/telemetry');
+const autonomousStore = require('./lib/autonomous-store');
+const { AutonomousOrchestrator } = require('./lib/autonomous-orchestrator');
+const tokenReport = require('./lib/token-report');
+const goalSuggester = require('./lib/goal-suggester');
 
 const {
   FindWindowA, ShowWindow, IsIconic, IsWindow, MoveWindow,
@@ -30,6 +34,7 @@ const SW_RESTORE = 9;
 let mainWindow;
 let tray = null;
 let firstShowDone = false;   // bar created with show:false until first resize-bar
+let autoOrchestrator = null; // AutonomousOrchestrator instance (starts in dry-run)
 
 // Git cache for overlay titles (branch + dirty per cwd, 30s TTL)
 const mainGitCache = {};     // cwd -> { branch, dirty }
@@ -614,6 +619,254 @@ ipcMain.handle('activate', async (_ev, { email, name }) => {
   }
 });
 
+// ---- IPC: autonomous orchestrator (new system, F1+) ----
+
+ipcMain.handle('auto:get-config', () => autonomousStore.getConfig());
+ipcMain.handle('auto:update-config', (_ev, partial) => autonomousStore.updateConfig(partial));
+ipcMain.handle('auto:get-project', (_ev, name) => autonomousStore.getProject(name));
+ipcMain.handle('auto:update-project', (_ev, name, patch) => autonomousStore.updateProject(name, patch));
+ipcMain.handle('auto:toggle-active', (_ev, name, active) => autonomousStore.toggleActive(name, active));
+ipcMain.handle('auto:set-objective', (_ev, name, objective) => autonomousStore.setObjective(name, objective));
+ipcMain.handle('auto:get-events', (_ev, n) => autonomousStore.readEvents(n || 200));
+
+ipcMain.handle('auto:get-status', () => {
+  if (!autoOrchestrator) return { running: false, dryRun: true };
+  return {
+    running: autoOrchestrator.isRunning(),
+    dryRun: autoOrchestrator.isDryRun(),
+    lastTickAt: autoOrchestrator.getLastTickAt(),
+    lastTickResult: autoOrchestrator.getLastTickResult(),
+  };
+});
+
+ipcMain.handle('auto:set-dry-run', (_ev, dryRun) => {
+  if (!autoOrchestrator) return false;
+  autoOrchestrator.setDryRun(!!dryRun);
+  return true;
+});
+
+ipcMain.handle('auto:tick-now', async () => {
+  if (!autoOrchestrator) return { action: 'skip', reason: 'orchestrator not running' };
+  return autoOrchestrator.runTickNow();
+});
+
+ipcMain.handle('auto:start', () => {
+  if (!autoOrchestrator) return false;
+  autoOrchestrator.start();
+  return true;
+});
+
+ipcMain.handle('auto:stop', () => {
+  if (!autoOrchestrator) return false;
+  autoOrchestrator.stop();
+  return true;
+});
+
+ipcMain.handle('auto:token-report', (_ev, opts) => {
+  const entries = tokenHistory.readHistory(500);
+  const events = autonomousStore.readEvents(2000);
+  return {
+    summary: tokenReport.summarize(entries, opts),
+    byDay: tokenReport.bucketByDay(entries),
+    rankedCycles: tokenReport.rankCycles(entries, events, { limit: 30 }),
+  };
+});
+
+ipcMain.handle('auto:token-avg', (_ev, windowDays) => {
+  const entries = tokenHistory.readHistory(500);
+  return tokenReport.computeAverage(entries, { windowDays: windowDays || 7 });
+});
+
+// Reads project files + git log for the detail drawer.
+ipcMain.handle('auto:get-project-info', async (_ev, name) => {
+  const project = autonomousStore.getProject(name);
+  if (!project || !project.path) return { name, error: 'no-path' };
+  const p = project.path;
+  const out = { name, path: p, stack: project.stack, score: project.score };
+
+  // README preview (first 2000 chars)
+  const readmeCandidates = ['README.md', 'README.MD', 'Readme.md', 'readme.md', 'README'];
+  for (const f of readmeCandidates) {
+    try {
+      const full = path.join(p, f);
+      if (fs.existsSync(full)) {
+        out.readme = fs.readFileSync(full, 'utf-8').slice(0, 2000);
+        break;
+      }
+    } catch {}
+  }
+
+  // CLAUDE.md preview
+  try {
+    const claudeMd = path.join(p, 'CLAUDE.md');
+    if (fs.existsSync(claudeMd)) {
+      out.claudeMd = fs.readFileSync(claudeMd, 'utf-8').slice(0, 2000);
+    }
+  } catch {}
+
+  // package.json or Cargo.toml summary
+  try {
+    const pkg = path.join(p, 'package.json');
+    const cargo = path.join(p, 'Cargo.toml');
+    if (fs.existsSync(pkg)) {
+      out.packageManifest = JSON.parse(fs.readFileSync(pkg, 'utf-8'));
+    } else if (fs.existsSync(cargo)) {
+      out.packageManifest = { name: require('path').basename(p), _source: 'Cargo.toml' };
+    }
+  } catch {}
+
+  // Recent git info
+  try {
+    out.lastCommitDays = await new Promise(resolve => {
+      execFile('git', ['log', '-1', '--format=%ct'], { cwd: p, timeout: 5000 }, (err, stdout) => {
+        if (err || !stdout.trim()) return resolve(null);
+        const ts = parseInt(stdout.trim(), 10);
+        if (isNaN(ts)) return resolve(null);
+        resolve(Math.floor((Date.now() / 1000 - ts) / 86400));
+      });
+    });
+  } catch {}
+
+  try {
+    out.recentCommits = await new Promise(resolve => {
+      execFile('git', ['log', '--since=14.days', '--oneline'], { cwd: p, timeout: 5000 }, (err, stdout) => {
+        if (err) return resolve(0);
+        resolve(stdout.trim().split('\n').filter(Boolean).length);
+      });
+    });
+  } catch {}
+
+  try {
+    out.recentCommitsList = await new Promise(resolve => {
+      execFile('git', ['log', '-5', '--format=%h %s'], { cwd: p, timeout: 5000 }, (err, stdout) => {
+        if (err) return resolve([]);
+        resolve(stdout.trim().split('\n').filter(Boolean).slice(0, 5));
+      });
+    });
+  } catch {}
+
+  return out;
+});
+
+// Analiza un proyecto con Claude Haiku — resumen humano de qué es.
+// ~1-2k tokens por llamada. Es tirar tokens a propósito para ayudar al usuario
+// a recordar/entender proyectos que tiene abandonados.
+ipcMain.handle('auto:analyze-project', async (_ev, name) => {
+  const project = autonomousStore.getProject(name);
+  if (!project?.path) return { error: 'no-path' };
+  const p = project.path;
+
+  // Recolecta señales
+  const parts = [];
+  parts.push(`# Proyecto: ${name}`);
+  parts.push(`Path: ${p}`);
+  parts.push(`Stack detectado: ${project.stack || 'unknown'}`);
+
+  const addFileIf = (relPath, header) => {
+    try {
+      const f = path.join(p, relPath);
+      if (fs.existsSync(f)) {
+        const content = fs.readFileSync(f, 'utf-8').slice(0, 3000);
+        parts.push(`\n## ${header} (${relPath})\n${content}`);
+      }
+    } catch {}
+  };
+  addFileIf('README.md', 'README');
+  addFileIf('CLAUDE.md', 'CLAUDE.md');
+  addFileIf('package.json', 'package.json');
+  addFileIf('Cargo.toml', 'Cargo.toml');
+  addFileIf('pyproject.toml', 'pyproject.toml');
+
+  // Estructura de top level (archivos + dirs de nivel 1)
+  try {
+    const entries = fs.readdirSync(p).slice(0, 40);
+    parts.push(`\n## Archivos en raíz\n${entries.join('\n')}`);
+  } catch {}
+
+  // Últimos commits
+  const recentLog = await new Promise(resolve => {
+    execFile('git', ['log', '-10', '--format=%h %ci %s'], { cwd: p, timeout: 5000 }, (err, stdout) => {
+      resolve(err ? '' : stdout.trim());
+    });
+  });
+  if (recentLog) parts.push(`\n## Últimos 10 commits\n${recentLog}`);
+
+  const context = parts.join('\n').slice(0, 15000);
+  const prompt = `Analiza este proyecto y escríbeme 3-4 frases MUY concretas en español respondiendo:
+
+1. ¿Qué hace este proyecto? (o qué pretendía hacer si está abandonado)
+2. ¿En qué estado está? (vivo, dormido, abandonado, experimento)
+3. ¿Vale la pena activarlo en un orquestador autónomo? Recomendación clara:
+   - activar con plantilla X (nombre concreto: production-ready | MVP-lanzable | mantenimiento | explorar-idea | seguro-y-testeado)
+   - ignorar / pausar (razón breve)
+
+SÉ DIRECTO. Sin preámbulos. Sin markdown. Prosa natural corta.
+
+---
+
+${context}`;
+
+  return new Promise((resolve) => {
+    const args = [
+      '--print', '-p', prompt,
+      '--model', 'haiku',
+      '--max-turns', '1',
+      '--output-format', 'text',
+      '--dangerously-skip-permissions',
+    ];
+    const proc = require('child_process').spawn('claude', args, {
+      cwd: p, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
+    });
+    proc.stdin.end();
+    let out = '', err = '';
+    const timer = setTimeout(() => { try { proc.kill(); } catch {} resolve({ error: 'timeout' }); }, 60000);
+    proc.stdout.on('data', d => { out += d.toString(); });
+    proc.stderr.on('data', d => { err += d.toString(); });
+    proc.on('error', e => { clearTimeout(timer); resolve({ error: e.message }); });
+    proc.on('close', code => {
+      clearTimeout(timer);
+      if (code !== 0) return resolve({ error: `exit ${code}: ${err.slice(0, 200)}` });
+      resolve({ summary: out.trim() });
+    });
+  });
+});
+
+// Heurística local (sin LLM) para sugerir plantilla. Rápida y gratis.
+ipcMain.handle('auto:suggest-goal', async (_ev, name) => {
+  try {
+    const info = await (async () => {
+      // Reuse the same logic as get-project-info by calling the handler's work directly
+      const p = autonomousStore.getProject(name);
+      return {
+        name,
+        stack: p.stack,
+        score: p.score,
+        readme: null,  // will be filled below
+        packageManifest: null,
+        recentCommits: 0,
+        lastCommitDays: null,
+        checks: p.checks || {},
+      };
+    })();
+    // Enrich with file reads
+    const project = autonomousStore.getProject(name);
+    if (project.path) {
+      try {
+        const readme = path.join(project.path, 'README.md');
+        if (fs.existsSync(readme)) info.readme = fs.readFileSync(readme, 'utf-8').slice(0, 2000);
+      } catch {}
+      try {
+        const pkg = path.join(project.path, 'package.json');
+        if (fs.existsSync(pkg)) info.packageManifest = JSON.parse(fs.readFileSync(pkg, 'utf-8'));
+      } catch {}
+    }
+    // Heurística local (no LLM) por ahora — instantánea
+    return goalSuggester.heuristicSuggest(info);
+  } catch (e) {
+    return { template: 'MVP-lanzable', confidence: 0.2, reasoning: `error: ${e.message}`, source: 'heuristic' };
+  }
+});
+
 ipcMain.handle('track', (_ev, type, payload) => {
   try { telemetry.trackEvent(type, payload || {}); }
   catch {}
@@ -725,6 +978,24 @@ app.whenReady().then(async () => {
         }
       }
     });
+
+    // Start the autonomous orchestrator (goal-driven, LLM planner).
+    // Starts in DRY-RUN mode — it observes and decides, but does NOT execute.
+    // Coexists safely with the queue-based scheduler above. Toggle with
+    // `auto:set-dry-run` IPC once the new UI is wired.
+    autoOrchestrator = new AutonomousOrchestrator({
+      getConfig: async () => autonomousStore.getConfig(),
+      analyze: async (project) => analyzer.analyze(project),
+      updateProject: async (name, patch) => autonomousStore.updateProject(name, patch),
+      dryRun: true,
+      onEvent: (event) => {
+        autonomousStore.appendEvent(event);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('auto:event', event);
+        }
+      },
+    });
+    autoOrchestrator.start();
   });
 });
 app.on('window-all-closed', () => { /* don't quit — tray keeps running */ });
@@ -735,6 +1006,7 @@ app.on('before-quit', async () => {
   appBarUnregister();
   overlayManager.setQuitting(true);
   scheduler.stop();
+  try { if (autoOrchestrator) autoOrchestrator.stop(); } catch {}
   overlayManager.stopLoop();
   overlayManager.destroyAll();
 });
