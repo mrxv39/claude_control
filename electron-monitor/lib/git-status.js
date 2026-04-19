@@ -5,7 +5,7 @@
  * Used to show git badges on session chips.
  */
 
-const { execFile } = require('child_process');
+const { gitExec, gitExecLines } = require('./git-exec');
 
 /**
  * Get the current git branch name.
@@ -13,11 +13,7 @@ const { execFile } = require('child_process');
  * @returns {Promise<string|null>} Branch name or null on error
  */
 function gitBranch(cwd) {
-  return new Promise(resolve => {
-    execFile('git', ['branch', '--show-current'], { cwd, timeout: 5000 }, (err, stdout) => {
-      resolve(err ? null : stdout.trim());
-    });
-  });
+  return gitExec(cwd, ['branch', '--show-current']);
 }
 
 /**
@@ -25,14 +21,9 @@ function gitBranch(cwd) {
  * @param {string} cwd - Project directory
  * @returns {Promise<number>} Number of changed files
  */
-function gitDirtyCount(cwd) {
-  return new Promise(resolve => {
-    execFile('git', ['status', '--porcelain'], { cwd, timeout: 5000 }, (err, stdout) => {
-      if (err) return resolve(0);
-      const lines = stdout.trim().split('\n').filter(Boolean);
-      resolve(lines.length);
-    });
-  });
+async function gitDirtyCount(cwd) {
+  const lines = await gitExecLines(cwd, ['status', '--porcelain']);
+  return lines.length;
 }
 
 /**
@@ -42,12 +33,7 @@ function gitDirtyCount(cwd) {
  * @returns {Promise<string[]>} Array of one-line commit strings
  */
 function gitRecentCommits(cwd, count = 3) {
-  return new Promise(resolve => {
-    execFile('git', ['log', `--oneline`, `-${count}`], { cwd, timeout: 5000 }, (err, stdout) => {
-      if (err) return resolve([]);
-      resolve(stdout.trim().split('\n').filter(Boolean));
-    });
-  });
+  return gitExecLines(cwd, ['log', '--oneline', `-${count}`]);
 }
 
 /**
