@@ -8,7 +8,8 @@
 
 const path = require('path');
 const fs = require('fs');
-const { execFile, spawn } = require('child_process');
+const { spawn } = require('child_process');
+const { gitExec, gitExecLines } = require('../git-exec');
 
 function register(ipcMain, deps) {
   const {
@@ -112,34 +113,16 @@ function register(ipcMain, deps) {
       }
     } catch {}
 
-    try {
-      out.lastCommitDays = await new Promise(resolve => {
-        execFile('git', ['log', '-1', '--format=%ct'], { cwd: p, timeout: 5000 }, (err, stdout) => {
-          if (err || !stdout.trim()) return resolve(null);
-          const ts = parseInt(stdout.trim(), 10);
-          if (isNaN(ts)) return resolve(null);
-          resolve(Math.floor((Date.now() / 1000 - ts) / 86400));
-        });
-      });
-    } catch {}
+    const lastTsStr = await gitExec(p, ['log', '-1', '--format=%ct']);
+    if (lastTsStr) {
+      const ts = parseInt(lastTsStr, 10);
+      out.lastCommitDays = isNaN(ts) ? null : Math.floor((Date.now() / 1000 - ts) / 86400);
+    } else {
+      out.lastCommitDays = null;
+    }
 
-    try {
-      out.recentCommits = await new Promise(resolve => {
-        execFile('git', ['log', '--since=14.days', '--oneline'], { cwd: p, timeout: 5000 }, (err, stdout) => {
-          if (err) return resolve(0);
-          resolve(stdout.trim().split('\n').filter(Boolean).length);
-        });
-      });
-    } catch {}
-
-    try {
-      out.recentCommitsList = await new Promise(resolve => {
-        execFile('git', ['log', '-5', '--format=%h %s'], { cwd: p, timeout: 5000 }, (err, stdout) => {
-          if (err) return resolve([]);
-          resolve(stdout.trim().split('\n').filter(Boolean).slice(0, 5));
-        });
-      });
-    } catch {}
+    out.recentCommits = (await gitExecLines(p, ['log', '--since=14.days', '--oneline'])).length;
+    out.recentCommitsList = (await gitExecLines(p, ['log', '-5', '--format=%h %s'])).slice(0, 5);
 
     return out;
   });
@@ -177,11 +160,7 @@ function register(ipcMain, deps) {
       parts.push(`\n## Archivos en raíz\n${entries.join('\n')}`);
     } catch {}
 
-    const recentLog = await new Promise(resolve => {
-      execFile('git', ['log', '-10', '--format=%h %ci %s'], { cwd: p, timeout: 5000 }, (err, stdout) => {
-        resolve(err ? '' : stdout.trim());
-      });
-    });
+    const recentLog = await gitExec(p, ['log', '-10', '--format=%h %ci %s']);
     if (recentLog) parts.push(`\n## Últimos 10 commits\n${recentLog}`);
 
     const context = parts.join('\n').slice(0, 15000);

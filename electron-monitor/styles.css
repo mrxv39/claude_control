@@ -239,3 +239,21 @@ body.panel-mode .panel { display:flex; flex-direction:column; height:100vh; }
 .stats-hbar-track { flex:1; height:18px; background:rgba(255,255,255,.03); border-radius:4px; overflow:hidden; }
 .stats-hbar-fill { height:100%; background:var(--accent); border-radius:4px; transition:width .3s ease; opacity:.8; }
 .stats-hbar-count { font-size:10px; color:var(--text-dim); width:30px; text-align:right; flex-shrink:0; font-variant-numeric:tabular-nums; }
+
+/* ── Tab Autónomo: filas de proyecto ── */
+.auto-row { display:grid; grid-template-columns:28px 1fr auto auto; align-items:center; gap:10px; padding:8px 12px; border-left:3px solid transparent; font-size:12px; transition:background 120ms; }
+.auto-row-active { border-left-color:#9ece6a; background:rgba(158,206,106,.06); }
+.auto-toggle { width:24px; height:16px; border-radius:8px; border:none; padding:0; background:rgba(255,255,255,.1); position:relative; cursor:pointer; transition:background 150ms; flex-shrink:0; }
+.auto-toggle.on { background:#9ece6a; }
+.auto-toggle-knob { position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:6px; background:#565f89; transition:left 150ms; }
+.auto-toggle.on .auto-toggle-knob { left:10px; background:#1a1b26; }
+.auto-label-col { min-width:0; display:flex; align-items:center; gap:8px; }
+.auto-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#a9b1d6; font-weight:400; cursor:pointer; text-decoration:none; }
+.auto-name:hover { text-decoration:underline; }
+.auto-row-active .auto-name { color:#c0caf5; font-weight:500; }
+.auto-stack-badge { flex-shrink:0; padding:1px 6px; border-radius:3px; font-size:9px; text-transform:uppercase; letter-spacing:.3px; }
+.auto-template { font-size:11px; padding:2px 6px; background:rgba(255,255,255,.04); color:#a9b1d6; border:1px solid rgba(255,255,255,.1); border-radius:4px; cursor:pointer; min-width:140px; }
+.auto-template.has-tpl { background:#7aa2f726; color:#7aa2f7; border-color:#7aa2f7; }
+.auto-score-pill { padding:2px 6px; border-radius:4px; font-size:11px; text-align:center; min-width:40px; font-variant-numeric:tabular-nums; }
+.auto-section-header { display:flex; align-items:center; gap:8px; font-size:10px; margin-top:14px; margin-bottom:4px; text-transform:uppercase; letter-spacing:.5px; font-weight:600; padding:0 12px; color:#7aa2f7; }
+.auto-section-count { color:#565f89; font-weight:400; }

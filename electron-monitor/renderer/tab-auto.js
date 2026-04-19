@@ -1,10 +1,11 @@
 // renderer/tab-auto.js — Tab Autonomo: sistema nuevo F1+ (DOM-API only).
-// Incluye project rows, feed, header, drawer de detalle de proyecto con
-// preview README/CLAUDE.md, analisis via Claude Haiku, sugerencia de plantilla.
+// Project rows, feed, header. El drawer de detalle está en tab-auto-drawer.js.
 // Expuesto via createAutoTab({ipcRenderer}); attachEventStream(panelCore) cablea
 // el stream auto:event que hace throttled refresh cuando este tab esta activo.
 
 const { el } = require('./common.js');
+const { stackColor, scoreColor, groupByStack, matchesSearch } = require('./tab-auto-utils.js');
+const { createDrawerOpener } = require('./tab-auto-drawer.js');
 
 const AUTO_TEMPLATES = [
   { name: 'production-ready', label: 'Production-ready' },
@@ -14,62 +15,14 @@ const AUTO_TEMPLATES = [
   { name: 'seguro-y-testeado', label: 'Seguro y testeado' },
 ];
 
-// Colores por stack (Tokyo Night palette coherente con el resto de la UI)
-const STACK_COLORS = {
-  'node': '#9ece6a',
-  'python': '#e0af68',
-  'tauri+rust': '#ff9e64',
-  'electron': '#7aa2f7',
-  'python+node': '#bb9af7',
-  'rust': '#ff9e64',
-  'unknown': '#565f89',
-};
-
-function stackColor(stack) { return STACK_COLORS[stack] || '#565f89'; }
-function scoreColor(score) {
-  const n = typeof score === 'number' ? score : 0;
-  if (n >= 7) return '#9ece6a';
-  if (n >= 4) return '#e0af68';
-  return '#f7768e';
-}
-
-const TEMPLATE_DESCRIPTIONS = {
-  'production-ready': {
-    label: 'Production-ready',
-    tagline: 'Listo para usuarios reales',
-    desc: 'Exige tests con cobertura ≥70% en módulos críticos, CLAUDE.md vigente, security audit <30d, score ≥8/10 y deps al día. Es el objetivo más estricto — elígelo para proyectos maduros que ya están (o estarán pronto) en producción.',
-    color: '#9ece6a',
-  },
-  'MVP-lanzable': {
-    label: 'MVP lanzable',
-    tagline: 'Mínimo viable publicable',
-    desc: 'README útil (qué hace, cómo arrancar), tests de happy path, sin bugs bloqueantes, script de deploy probado. Para proyectos en desarrollo activo que quieres poder enseñar/publicar en breve.',
-    color: '#7aa2f7',
-  },
-  'mantenimiento': {
-    label: 'Mantenimiento',
-    tagline: 'No tocar demasiado',
-    desc: 'Score ≥7/10 estable, deps revisadas cada 14d, sin commits rotos en main, CLAUDE.md coherente. Para proyectos que ya funcionan y solo quieres que no se pudran.',
-    color: '#bb9af7',
-  },
-  'explorar-idea': {
-    label: 'Explorar idea',
-    tagline: 'Prototipo / research',
-    desc: 'CLAUDE.md narrativo (idea, hipótesis), prototipos en ramas separadas, log de experimentos. Sin exigencias de cobertura ni deps al día. Para ideas tempranas donde la velocidad de experimentación importa más que la robustez.',
-    color: '#e0af68',
-  },
-  'seguro-y-testeado': {
-    label: 'Seguro y testeado',
-    tagline: 'Robusto para uso externo',
-    desc: 'Security audit mensual, 0 deps con CVEs activas, tests ≥80% en módulos de entrada (APIs, auth, pagos), secrets scanning, rate limiting documentado. Para proyectos con dominio sensible: pagos, datos personales, API pública.',
-    color: '#f7768e',
-  },
-};
-
 function createAutoTab({ ipcRenderer }) {
   const panelContent = document.getElementById('panel-content');
   let autoSearchQuery = '';
   let getCurrentTab = () => 'auto'; // default hasta que se llame attachEventStream
+  const openProjectDrawer = createDrawerOpener({
+    ipcRenderer,
+    onAfterAction: () => { renderAuto().catch(() => {}); },
+  });
 
   function autoProjectRow(name, p, active) {
     const tpl = p.objective?.template || '';
@@ -81,75 +34,35 @@ function createAutoTab({ ipcRenderer }) {
     const row = el('div', {
       class: 'auto-row' + (active ? ' auto-row-active' : ''),
       dataset: { project: name },
-      style: {
-        display: 'grid',
-        gridTemplateColumns: '28px 1fr auto auto',
-        alignItems: 'center',
-        gap: '10px',
-        padding: '8px 12px',
-        borderLeft: `3px solid ${active ? '#9ece6a' : 'transparent'}`,
-        background: active ? 'rgba(158,206,106,.06)' : 'transparent',
-        fontSize: '12px',
-        transition: 'background 120ms',
-      },
     });
 
     const toggle = el('button', {
-      class: 'auto-toggle',
+      class: 'auto-toggle' + (active ? ' on' : ''),
       title: active ? 'Pausar este proyecto' : 'Activar este proyecto',
-      style: {
-        width: '24px', height: '16px', borderRadius: '8px', border: 'none', padding: '0',
-        background: active ? '#9ece6a' : 'rgba(255,255,255,.1)',
-        position: 'relative', cursor: 'pointer', transition: 'background 150ms',
-        flexShrink: '0',
-      },
       onclick: async (ev) => {
         ev.stopPropagation();
         await ipcRenderer.invoke('auto:toggle-active', name, !active);
         renderAuto();
       },
     });
-    toggle.appendChild(el('span', {
-      style: {
-        position: 'absolute', top: '2px', left: active ? '10px' : '2px',
-        width: '12px', height: '12px', borderRadius: '6px',
-        background: active ? '#1a1b26' : '#565f89',
-        transition: 'left 150ms',
-      },
-    }));
+    toggle.appendChild(el('span', { class: 'auto-toggle-knob' }));
 
-    const labelCol = el('div', { style: { minWidth: '0', display: 'flex', alignItems: 'center', gap: '8px' } });
+    const labelCol = el('div', { class: 'auto-label-col' });
     const nameBtn = el('span', {
-      style: {
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        color: active ? '#c0caf5' : '#a9b1d6', fontWeight: active ? '500' : '400',
-        cursor: 'pointer', textDecoration: 'none',
-      },
+      class: 'auto-name',
       title: 'Ver detalle del proyecto',
       text: name,
       onclick: () => openProjectDrawer(name),
     });
-    nameBtn.addEventListener('mouseenter', () => nameBtn.style.textDecoration = 'underline');
-    nameBtn.addEventListener('mouseleave', () => nameBtn.style.textDecoration = 'none');
     labelCol.appendChild(nameBtn);
     labelCol.appendChild(el('span', {
-      style: {
-        flexShrink: '0', color: sColor, background: sColor + '1a',
-        padding: '1px 6px', borderRadius: '3px', fontSize: '9px',
-        textTransform: 'uppercase', letterSpacing: '.3px',
-      },
+      class: 'auto-stack-badge',
+      style: { color: sColor, background: sColor + '1a' },
       text: stack,
     }));
 
     const select = el('select', {
-      class: 'auto-template',
-      style: {
-        fontSize: '11px', padding: '2px 6px',
-        background: tpl ? '#7aa2f726' : 'rgba(255,255,255,.04)',
-        color: tpl ? '#7aa2f7' : '#a9b1d6',
-        border: `1px solid ${tpl ? '#7aa2f7' : 'rgba(255,255,255,.1)'}`,
-        borderRadius: '4px', cursor: 'pointer', minWidth: '140px',
-      },
+      class: 'auto-template' + (tpl ? ' has-tpl' : ''),
       onchange: async () => {
         const val = select.value;
         await ipcRenderer.invoke('auto:set-objective', name, val ? { template: val } : null);
@@ -164,11 +77,8 @@ function createAutoTab({ ipcRenderer }) {
     }
 
     const scorePill = el('span', {
-      style: {
-        color: scColor, background: scColor + '1a',
-        padding: '2px 6px', borderRadius: '4px', fontSize: '11px',
-        textAlign: 'center', minWidth: '40px', fontVariantNumeric: 'tabular-nums',
-      },
+      class: 'auto-score-pill',
+      style: { color: scColor, background: scColor + '1a' },
       text: score != null ? `${score}/10` : '—',
     });
 
@@ -195,41 +105,11 @@ function createAutoTab({ ipcRenderer }) {
 
   function sectionHeader(title, count, color) {
     return el('div', {
-      style: {
-        display: 'flex', alignItems: 'center', gap: '8px',
-        fontSize: '10px', color: color || '#7aa2f7', marginTop: '14px', marginBottom: '4px',
-        textTransform: 'uppercase', letterSpacing: '.5px', fontWeight: '600',
-        padding: '0 12px',
-      },
+      class: 'auto-section-header',
+      style: color ? { color } : {},
     },
     el('span', { text: title }),
-    el('span', {
-      style: { color: '#565f89', fontWeight: '400' },
-      text: `· ${count}`,
-    }));
-  }
-
-  function groupByStack(projects) {
-    const groups = {};
-    for (const [name, p] of projects) {
-      const s = p.stack || 'unknown';
-      if (!groups[s]) groups[s] = [];
-      groups[s].push([name, p]);
-    }
-    for (const k of Object.keys(groups)) groups[k].sort((a, b) => a[0].localeCompare(b[0]));
-    const order = ['node', 'tauri+rust', 'rust', 'python', 'python+node', 'electron', 'unknown'];
-    return order
-      .map(s => ({ stack: s, projects: groups[s] || [] }))
-      .filter(g => g.projects.length)
-      .concat(Object.keys(groups).filter(k => !order.includes(k)).map(s => ({ stack: s, projects: groups[s] })));
-  }
-
-  function matchesSearch(name, p, q) {
-    if (!q) return true;
-    const lower = q.toLowerCase();
-    if (name.toLowerCase().includes(lower)) return true;
-    if ((p.stack || '').toLowerCase().includes(lower)) return true;
-    return false;
+    el('span', { class: 'auto-section-count', text: `· ${count}` }));
   }
 
   async function renderAuto() {
@@ -383,289 +263,6 @@ function createAutoTab({ ipcRenderer }) {
       for (const e of events.slice(-30).reverse()) feedBox.appendChild(autoEventNode(e));
       panelContent.appendChild(feedBox);
     }
-  }
-
-  async function openProjectDrawer(name) {
-    const old = document.getElementById('auto-drawer');
-    if (old) old.remove();
-
-    const backdrop = el('div', {
-      id: 'auto-drawer',
-      style: {
-        position: 'fixed', top: '0', left: '0', right: '0', bottom: '0',
-        background: 'rgba(0,0,0,.5)', zIndex: '999',
-        display: 'flex', justifyContent: 'flex-end',
-      },
-      onclick: (ev) => { if (ev.target.id === 'auto-drawer') backdrop.remove(); },
-    });
-    const drawer = el('div', {
-      style: {
-        width: 'min(640px, 85vw)', height: '100vh',
-        background: '#1a1b26', borderLeft: '1px solid rgba(255,255,255,.08)',
-        overflowY: 'auto', padding: '20px 24px',
-        boxShadow: '-10px 0 40px rgba(0,0,0,.4)',
-        color: '#c0caf5',
-      },
-    });
-
-    drawer.appendChild(el('div', {
-      style: { color: '#565f89', fontSize: '11px', marginBottom: '8px' },
-      text: 'Cargando…',
-    }));
-    drawer.appendChild(el('h2', {
-      style: { margin: '0 0 12px', fontSize: '20px', fontWeight: '600' },
-      text: name,
-    }));
-
-    backdrop.appendChild(drawer);
-    document.body.appendChild(backdrop);
-
-    const [info, current, suggestion] = await Promise.all([
-      ipcRenderer.invoke('auto:get-project-info', name),
-      ipcRenderer.invoke('auto:get-project', name),
-      ipcRenderer.invoke('auto:suggest-goal', name),
-    ]);
-
-    drawer.replaceChildren();
-
-    const headerRow = el('div', {
-      style: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '4px' },
-    },
-    el('div', {},
-      el('h2', { style: { margin: '0', fontSize: '22px', fontWeight: '600' }, text: name }),
-      el('div', { style: { color: '#565f89', fontSize: '11px', marginTop: '4px' }, text: info.path || '—' }),
-    ),
-    el('button', {
-      style: { background: 'transparent', border: 'none', color: '#565f89', fontSize: '20px', cursor: 'pointer', padding: '0 4px' },
-      title: 'Cerrar',
-      text: '✕',
-      onclick: () => backdrop.remove(),
-    }));
-    drawer.appendChild(headerRow);
-
-    const chips = el('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '12px 0 14px' } });
-    if (info.stack) chips.appendChild(metaChip(info.stack, stackColor(info.stack)));
-    if (typeof info.score === 'number') chips.appendChild(metaChip(`Score ${info.score}/10`, scoreColor(info.score)));
-    if (typeof info.lastCommitDays === 'number') {
-      const d = info.lastCommitDays;
-      const lbl = d === 0 ? 'Commit hoy' : d === 1 ? 'Commit ayer' : `Último commit: hace ${d}d`;
-      chips.appendChild(metaChip(lbl, d <= 7 ? '#9ece6a' : d <= 30 ? '#e0af68' : '#565f89'));
-    }
-    if (typeof info.recentCommits === 'number' && info.recentCommits > 0) {
-      chips.appendChild(metaChip(`${info.recentCommits} commits /14d`, '#7aa2f7'));
-    }
-    drawer.appendChild(chips);
-
-    const haystack = ((info.readme || '') + ' ' + (info.claudeMd || '')).toLowerCase();
-    const scratchpadSignals = ['scratchpad', 'workspace para tareas', 'sin código de aplicación', 'sin aplicación', 'repositorio de notas', 'solo documentación'];
-    const isScratchpad = scratchpadSignals.some(s => haystack.includes(s));
-    if (isScratchpad) {
-      drawer.appendChild(el('div', {
-        style: {
-          display: 'flex', alignItems: 'center', gap: '10px',
-          padding: '10px 14px', marginBottom: '14px',
-          background: 'rgba(224,175,104,.08)',
-          border: '1px solid rgba(224,175,104,.3)',
-          borderRadius: '6px',
-        },
-      },
-      el('span', { style: { fontSize: '16px' }, text: '🗒' }),
-      el('div', {},
-        el('div', { style: { color: '#e0af68', fontSize: '12px', fontWeight: '600' }, text: 'Workspace / notas' }),
-        el('div', { style: { color: '#a9b1d6', fontSize: '11px', marginTop: '2px' }, text: 'Este repo parece documentación/notas sin código. Probablemente no merece plantilla — considera dejarlo pausado.' }),
-      )));
-    }
-
-    const askCard = el('div', {
-      id: 'auto-drawer-ask',
-      style: {
-        padding: '14px 16px', marginBottom: '18px',
-        background: 'linear-gradient(135deg, rgba(187,154,247,.08), rgba(122,162,247,.06))',
-        border: '1px solid rgba(187,154,247,.25)',
-        borderRadius: '8px',
-      },
-    });
-    const askTitle = el('div', {
-      style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' },
-    },
-    el('span', { style: { fontSize: '15px' }, text: '🤖' }),
-    el('span', { style: { color: '#bb9af7', fontSize: '13px', fontWeight: '600' }, text: '¿Qué es este proyecto?' }));
-    askCard.appendChild(askTitle);
-    askCard.appendChild(el('div', {
-      style: { color: '#a9b1d6', fontSize: '11px', marginBottom: '10px', lineHeight: '1.5' },
-      text: 'Claude Haiku leerá README + CLAUDE.md + package.json + últimos commits + archivos en raíz, y te resumirá en 3-4 frases qué hace, en qué estado está, y si vale la pena activarlo. ~1-2k tokens.',
-    }));
-    const askBtn = el('button', {
-      class: 'scan-btn',
-      style: { fontSize: '11px', color: '#bb9af7', borderColor: 'rgba(187,154,247,.4)', background: 'rgba(187,154,247,.15)' },
-      text: '💭 Analizar con Claude',
-      onclick: async () => {
-        askBtn.disabled = true;
-        askBtn.textContent = 'Analizando…';
-        const out = await ipcRenderer.invoke('auto:analyze-project', name);
-        askBtn.remove();
-        const resultBox = el('div', {
-          style: {
-            padding: '12px 14px', marginTop: '4px',
-            background: 'rgba(0,0,0,.2)',
-            borderLeft: '3px solid #bb9af7',
-            borderRadius: '4px',
-            fontSize: '12px', lineHeight: '1.6', color: '#c0caf5',
-            whiteSpace: 'pre-wrap',
-          },
-          text: out.error ? `Error: ${out.error}` : (out.summary || 'Sin respuesta'),
-        });
-        askCard.appendChild(resultBox);
-      },
-    });
-    askCard.appendChild(askBtn);
-    drawer.appendChild(askCard);
-
-    if (info.readme) {
-      drawer.appendChild(drawerSection('README',
-        el('div', {
-          style: {
-            fontSize: '12px', lineHeight: '1.5', whiteSpace: 'pre-wrap',
-            color: '#a9b1d6', maxHeight: '180px', overflowY: 'auto',
-            background: 'rgba(0,0,0,.2)', padding: '10px 12px', borderRadius: '4px',
-            border: '1px solid rgba(255,255,255,.04)', fontFamily: 'inherit',
-          },
-          text: info.readme.length >= 2000 ? info.readme + '\n\n…[truncado]' : info.readme,
-        })
-      ));
-    }
-
-    if (info.claudeMd) {
-      drawer.appendChild(drawerSection('CLAUDE.md',
-        el('div', {
-          style: {
-            fontSize: '12px', lineHeight: '1.5', whiteSpace: 'pre-wrap',
-            color: '#a9b1d6', maxHeight: '150px', overflowY: 'auto',
-            background: 'rgba(0,0,0,.2)', padding: '10px 12px', borderRadius: '4px',
-            border: '1px solid rgba(255,255,255,.04)', fontFamily: 'inherit',
-          },
-          text: info.claudeMd.length >= 2000 ? info.claudeMd + '\n\n…[truncado]' : info.claudeMd,
-        })
-      ));
-    } else {
-      drawer.appendChild(drawerSection('CLAUDE.md',
-        el('div', {
-          style: { fontSize: '11px', color: '#565f89', fontStyle: 'italic', padding: '8px 12px' },
-          text: 'No tiene CLAUDE.md. Una de las primeras tareas autónomas lo creará.',
-        })
-      ));
-    }
-
-    if (info.recentCommitsList && info.recentCommitsList.length) {
-      const commitsBox = el('div', {
-        style: {
-          fontSize: '11px', fontFamily: "'JetBrains Mono', Consolas, monospace", lineHeight: '1.5',
-          color: '#a9b1d6', background: 'rgba(0,0,0,.2)',
-          padding: '10px 12px', borderRadius: '4px',
-          border: '1px solid rgba(255,255,255,.04)',
-        },
-      });
-      for (const c of info.recentCommitsList) {
-        commitsBox.appendChild(el('div', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, text: c }));
-      }
-      drawer.appendChild(drawerSection('Últimos commits', commitsBox));
-    }
-
-    if (suggestion && suggestion.template) {
-      const tplDef = TEMPLATE_DESCRIPTIONS[suggestion.template] || { label: suggestion.template, color: '#7aa2f7', desc: '' };
-      const conf = Math.round((suggestion.confidence || 0) * 100);
-      const suggestionCard = el('div', {
-        style: {
-          padding: '14px 16px', margin: '16px 0',
-          background: tplDef.color + '10',
-          border: `1px solid ${tplDef.color}40`,
-          borderRadius: '6px',
-        },
-      },
-      el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' } },
-        el('span', { style: { fontSize: '14px' }, text: '💡' }),
-        el('span', { style: { color: '#565f89', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.5px' }, text: 'Sugerencia' }),
-        el('span', { style: { color: tplDef.color, fontSize: '13px', fontWeight: '600' }, text: tplDef.label }),
-        el('span', { style: { color: '#565f89', fontSize: '10px', marginLeft: 'auto' }, text: `${conf}% confianza` }),
-      ),
-      el('div', { style: { color: '#a9b1d6', fontSize: '12px', lineHeight: '1.5', marginBottom: '10px' }, text: suggestion.reasoning || '' }),
-      el('button', {
-        class: 'scan-btn',
-        style: { fontSize: '11px', color: tplDef.color, borderColor: tplDef.color + '60', background: tplDef.color + '20' },
-        text: `Aplicar "${tplDef.label}"`,
-        onclick: async () => {
-          await ipcRenderer.invoke('auto:set-objective', name, { template: suggestion.template });
-          backdrop.remove();
-          renderAuto();
-        },
-      }));
-      drawer.appendChild(suggestionCard);
-    }
-
-    const currentTpl = current?.objective?.template || '';
-    drawer.appendChild(el('div', {
-      style: { color: '#565f89', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.5px', margin: '20px 0 8px' },
-      text: 'Elegir objetivo',
-    }));
-    for (const [key, def] of Object.entries(TEMPLATE_DESCRIPTIONS)) {
-      const isActive = currentTpl === key;
-      const card = el('div', {
-        style: {
-          padding: '12px 14px', marginBottom: '8px',
-          background: isActive ? def.color + '1a' : 'rgba(255,255,255,.02)',
-          border: `1px solid ${isActive ? def.color + '60' : 'rgba(255,255,255,.06)'}`,
-          borderRadius: '6px', cursor: 'pointer',
-          transition: 'background 120ms, border-color 120ms',
-        },
-        onclick: async () => {
-          if (isActive) {
-            await ipcRenderer.invoke('auto:set-objective', name, null);
-          } else {
-            await ipcRenderer.invoke('auto:set-objective', name, { template: key });
-          }
-          backdrop.remove();
-          renderAuto();
-        },
-      });
-      card.addEventListener('mouseenter', () => {
-        if (!isActive) card.style.background = 'rgba(255,255,255,.04)';
-      });
-      card.addEventListener('mouseleave', () => {
-        if (!isActive) card.style.background = 'rgba(255,255,255,.02)';
-      });
-      const header = el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' } },
-        el('span', { style: { color: def.color, fontSize: '13px', fontWeight: '600' }, text: def.label }),
-        el('span', { style: { color: '#565f89', fontSize: '11px' }, text: `— ${def.tagline}` }),
-      );
-      if (isActive) header.appendChild(el('span', {
-        style: { marginLeft: 'auto', color: def.color, fontSize: '10px', textTransform: 'uppercase' },
-        text: '✓ activo',
-      }));
-      card.appendChild(header);
-      card.appendChild(el('div', { style: { color: '#a9b1d6', fontSize: '11px', lineHeight: '1.5' }, text: def.desc }));
-      drawer.appendChild(card);
-    }
-  }
-
-  function drawerSection(title, content) {
-    const wrap = el('div', { style: { marginTop: '16px' } });
-    wrap.appendChild(el('div', {
-      style: { color: '#565f89', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: '6px' },
-      text: title,
-    }));
-    wrap.appendChild(content);
-    return wrap;
-  }
-
-  function metaChip(text, color) {
-    return el('span', {
-      style: {
-        color, background: color + '1a',
-        padding: '3px 8px', borderRadius: '4px', fontSize: '11px',
-        border: `1px solid ${color}30`,
-      },
-      text,
-    });
   }
 
   function attachEventStream(panelCore) {
