@@ -32,7 +32,18 @@
  */
 
 const { BrowserWindow } = require('electron');
-const { IsWindow, IsWindowVisible, IsIconic, GetWindowRect, WindowFromPoint, GetAncestor } = require('./win32');
+const { IsWindow, IsWindowVisible, IsIconic, GetWindowRect, setOwnerWindow } = require('./win32');
+
+/**
+ * Extract the native HWND (as Number) from an Electron BrowserWindow.
+ * getNativeWindowHandle() returns a Buffer: 8 bytes on x64, 4 bytes on x86.
+ * @param {Electron.BrowserWindow} win
+ * @returns {number}
+ */
+function nativeHwnd(win) {
+  const buf = win.getNativeWindowHandle();
+  return buf.length === 8 ? Number(buf.readBigUInt64LE()) : buf.readUInt32LE();
+}
 
 /** @type {Map<number, OverlayInfo>} hwnd -> overlay state */
 const overlays = new Map();
@@ -104,13 +115,12 @@ function createBaseOverlay(width, clickable = false) {
   const win = new BrowserWindow({
     width, height: OVERLAY_H,
     x: -9999, y: -9999,
-    frame: false, transparent: true, alwaysOnTop: true,
+    frame: false, transparent: true, alwaysOnTop: false,
     skipTaskbar: true, focusable: false, resizable: false,
     hasShadow: false, show: false,
     webPreferences: { nodeIntegration: false, contextIsolation: true }
   });
   if (!clickable) win.setIgnoreMouseEvents(true);
-  win.setAlwaysOnTop(true, 'screen-saver');
   win._ready = false;
   win.once('ready-to-show', () => { win._ready = true; win.showInactive(); });
   return win;
@@ -128,6 +138,7 @@ function createBaseOverlay(width, clickable = false) {
 function createOverlay(hwnd, label, status, branch, dirty, contextPercent) {
   const win = createBaseOverlay(400);
   win.loadURL(overlayHtml(label, status, branch, dirty, contextPercent));
+  try { setOwnerWindow(nativeHwnd(win), hwnd); } catch {}
   return win;
 }
 
@@ -152,6 +163,7 @@ function skillButtonHtml(skill) {
 function createSkillOverlay(hwnd, skill, project, projectPath) {
   const win = createBaseOverlay(SKILL_BTN_W, true);
   win.loadURL(skillButtonHtml(skill));
+  try { setOwnerWindow(nativeHwnd(win), hwnd); } catch {}
 
   win.webContents.on('page-title-updated', (ev, title) => {
     ev.preventDefault();
@@ -262,23 +274,6 @@ function repositionOverlays() {
       const r = {};
       if (!GetWindowRect(h, r)) continue;
       const wWidth = r.right - r.left;
-      const wHeight = r.bottom - r.top;
-      const probeX = r.left + Math.floor(wWidth / 2);
-      const probeY = r.top + Math.floor(wHeight / 2);
-      let occluded = false;
-      try {
-        const hit = WindowFromPoint({ x: probeX, y: probeY });
-        if (hit) {
-          const root = GetAncestor(hit, 2) || hit;
-          if (Number(root) !== Number(h)) occluded = true;
-        } else {
-          occluded = true;
-        }
-      } catch {}
-      if (occluded) {
-        if (!info.offscreen) { info.win.hide(); info.offscreen = true; }
-        continue;
-      }
       const hasSkillBtn = skillOverlays.has(h);
       const overlayW = Math.max(100, wWidth - OVERLAY_BTN_MARGIN - (hasSkillBtn ? SKILL_BTN_W + 4 : 0));
       const nx = r.left, ny = r.top + 4;
@@ -305,12 +300,10 @@ function repositionOverlays() {
     }
   }
 
-  // Hide skill overlays for occluded/hidden parent windows
+  // Hide skill overlays whose parent title overlay was removed.
   for (const [h, si] of skillOverlays) {
     if (!si.win || si.win.isDestroyed()) { skillOverlays.delete(h); continue; }
-    if (!overlays.has(h) || (overlays.get(h).offscreen && !si.offscreen)) {
-      si.win.hide(); si.offscreen = true;
-    }
+    if (!overlays.has(h)) { si.win.hide(); si.offscreen = true; }
   }
 }
 

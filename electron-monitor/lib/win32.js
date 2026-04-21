@@ -29,6 +29,21 @@ const FindWindowExA = user32.func('intptr __stdcall FindWindowExA(intptr parent,
 const GetWindowThreadProcessId = user32.func('uint __stdcall GetWindowThreadProcessId(intptr h, _Out_ uint32 *pid)');
 const GetWindowTextW = user32.func('int __stdcall GetWindowTextW(intptr h, uint16 *buf, int max)');
 const GetClassNameA = user32.func('int __stdcall GetClassNameA(intptr h, uint8 *buf, int max)');
+const SetWindowLongPtrA = user32.func('intptr __stdcall SetWindowLongPtrA(intptr h, int index, intptr newLong)');
+
+const GWLP_HWNDPARENT = -8;
+
+/**
+ * Make `hwnd` an owned window of `ownerHwnd`. Owned windows sit above their
+ * owner in the Z-order but NOT above unrelated windows — so if another window
+ * is brought to front on top of the owner, the owned window goes beneath it.
+ * Owned windows are also hidden with the owner and destroyed with the owner.
+ * @param {number} hwnd - The window to become owned
+ * @param {number} ownerHwnd - The new owner
+ */
+function setOwnerWindow(hwnd, ownerHwnd) {
+  SetWindowLongPtrA(hwnd, GWLP_HWNDPARENT, ownerHwnd);
+}
 
 // ---- AppBar (shell32) ----
 const APPBARDATA = koffi.struct('APPBARDATA', {
@@ -133,5 +148,6 @@ module.exports = {
   SetForegroundWindow, MoveWindow, GetWindowRect, IsWindowVisible,
   WindowFromPoint, GetAncestor, keybd_event, FindWindowExA,
   GetWindowThreadProcessId, GetWindowTextW, GetClassNameA,
+  SetWindowLongPtrA, setOwnerWindow,
   enumWtWindows, focusWindow, registerAppBar, unregisterAppBar, buildAppBarRect
 };
