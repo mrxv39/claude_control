@@ -166,9 +166,16 @@ function getSessions() {
 }
 
 function resolveHwnds(arr, wtWindows) {
-  // Clear stale HWNDs that no longer point to a valid window
+  // Collect current WT top-level window HWNDs. A cached HWND is only trusted
+  // if it matches one of these — otherwise it may be a dead handle, a child
+  // window of some WT, or an unrelated app window (Claude Code tab titles are
+  // turn summaries, so title-matching is unreliable and we rely on HWND set).
+  const wtHwnds = new Set();
+  for (const [, wins] of wtWindows) {
+    for (const w of wins) wtHwnds.add(Number(w.hwnd));
+  }
   for (const s of arr) {
-    if (s.hwnd && !IsWindow(s.hwnd)) s.hwnd = 0;
+    if (s.hwnd && !wtHwnds.has(Number(s.hwnd))) s.hwnd = 0;
   }
   const needHwnd = arr.filter(s => !s.hwnd);
   if (needHwnd.length === 0) return;
